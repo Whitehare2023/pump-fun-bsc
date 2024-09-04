@@ -1,12 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "./openzeppelin-contracts/contracts/access/Ownable.sol";
 import "./openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "./openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import "./openzeppelin-contracts/contracts/access/Ownable.sol";
 
 contract Deposit is Ownable {
-    using SafeERC20 for IERC20;
+    address public depositAccount; // 存款接收账户
+    address public nativeToken; // 原生代币地址，例如 BNB 或 ETH
+
+    struct DepositArgs {
+        string orderId;
+        string command;
+        string extraInfo;
+        uint8 maxIndex;
+        uint8 index;
+        uint256 cost;
+    }
+
+    struct DepositArgs2 {
+        string orderId;
+        string command;
+        string extraInfo;
+        uint8 maxIndex;
+        uint8 index;
+        uint256 cost1;
+        uint256 cost2;
+    }
 
     event DepositEvent(
         address indexed user,
@@ -34,105 +53,69 @@ contract Deposit is Ownable {
         uint256 timestamp
     );
 
-    address public depositAccount;
-    address public nativeTokenAddress; // Native token address (e.g., WBNB or WETH)
-
-    constructor(address _depositAccount, address _nativeTokenAddress) Ownable(msg.sender) {
+    constructor(address _depositAccount, address _nativeToken) {
         depositAccount = _depositAccount;
-        nativeTokenAddress = _nativeTokenAddress;
+        nativeToken = _nativeToken;
     }
 
-    // Single token deposit
-    function deposit(
-        address user,
-        address mint,
-        uint256 cost,
-        string memory orderId,
-        string memory command,
-        string memory extraInfo,
-        uint8 maxIndex,
-        uint8 index
-    ) external payable {
-        require(cost > 0, "Invalid cost");
+    function deposit(DepositArgs calldata args, address mint, address userTokenAccount) external payable {
+        require(args.cost > 0, "Invalid parameters");
 
-        if (mint == nativeTokenAddress) {
-            // Handle native token (BNB/ETH)
-            require(msg.value == cost, "Incorrect native token amount");
-            (bool success, ) = depositAccount.call{value: cost}("");
-            require(success, "Native token transfer failed");
+        if (mint == nativeToken) {
+            // 转账原生代币，例如 BNB 或 ETH
+            require(msg.value == args.cost, "Incorrect native token amount");
+            payable(depositAccount).transfer(args.cost);
         } else {
-            // Handle ERC20 token
-            IERC20(mint).safeTransferFrom(user, depositAccount, cost);
+            // 转账 ERC20 代币
+            require(IERC20(mint).transferFrom(msg.sender, depositAccount, args.cost), "Transfer failed");
         }
 
         emit DepositEvent(
-            user,
+            msg.sender,
             mint,
-            cost,
-            orderId,
-            command,
-            extraInfo,
-            maxIndex,
-            index,
+            args.cost,
+            args.orderId,
+            args.command,
+            args.extraInfo,
+            args.maxIndex,
+            args.index,
             block.timestamp
         );
     }
 
-    // Two tokens deposit
-    function depositTwoTokens(
-        address user,
-        address mint1,
-        uint256 cost1,
-        address mint2,
-        uint256 cost2,
-        string memory orderId,
-        string memory command,
-        string memory extraInfo,
-        uint8 maxIndex,
-        uint8 index
-    ) external payable {
-        require(cost1 > 0 && cost2 > 0, "Invalid costs");
+    function deposit2(DepositArgs2 calldata args, address mint1, address mint2, address userTokenAccount1, address userTokenAccount2) external payable {
+        require(args.cost1 > 0 && args.cost2 > 0, "Invalid parameters");
 
-        // Handle first token
-        if (mint1 == nativeTokenAddress) {
-            require(msg.value >= cost1, "Incorrect native token amount for mint1");
-            (bool success, ) = depositAccount.call{value: cost1}("");
-            require(success, "Native token transfer for mint1 failed");
+        if (mint1 == nativeToken) {
+            // 转账第一个原生代币
+            require(msg.value == args.cost1, "Incorrect native token amount for mint1");
+            payable(depositAccount).transfer(args.cost1);
         } else {
-            IERC20(mint1).safeTransferFrom(user, depositAccount, cost1);
+            // 转账第一个 ERC20 代币
+            require(IERC20(mint1).transferFrom(msg.sender, depositAccount, args.cost1), "Transfer failed for mint1");
         }
 
-        // Handle second token
-        if (mint2 == nativeTokenAddress) {
-            require(msg.value >= cost1 + cost2, "Incorrect native token amount for mint2");
-            (bool success, ) = depositAccount.call{value: cost2}("");
-            require(success, "Native token transfer for mint2 failed");
+        if (mint2 == nativeToken) {
+            // 转账第二个原生代币
+            require(msg.value == args.cost2, "Incorrect native token amount for mint2");
+            payable(depositAccount).transfer(args.cost2);
         } else {
-            IERC20(mint2).safeTransferFrom(user, depositAccount, cost2);
+            // 转账第二个 ERC20 代币
+            require(IERC20(mint2).transferFrom(msg.sender, depositAccount, args.cost2), "Transfer failed for mint2");
         }
 
         emit DepositEvent2(
-            user,
+            msg.sender,
             mint1,
-            cost1,
+            args.cost1,
             mint2,
-            cost2,
-            orderId,
-            command,
-            extraInfo,
-            maxIndex,
-            index,
+            args.cost2,
+            args.orderId,
+            args.command,
+            args.extraInfo,
+            args.maxIndex,
+            args.index,
             block.timestamp
         );
-    }
-
-    // Set deposit account
-    function setDepositAccount(address _depositAccount) external onlyOwner {
-        depositAccount = _depositAccount;
-    }
-
-    // Set native token address
-    function setNativeTokenAddress(address _nativeTokenAddress) external onlyOwner {
-        nativeTokenAddress = _nativeTokenAddress;
     }
 }

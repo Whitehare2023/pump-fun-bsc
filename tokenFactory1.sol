@@ -6,11 +6,11 @@ import "./openzeppelin-contracts/contracts/proxy/Clones.sol";
 import "./customToken1.sol";
 import "./initialize_config.sol";
 import "./add_quote_token.sol";
-import "./state.sol";
+import "./state.sol"; // 引入 state.sol 以使用其事件声明
 import "./ABDKMath64x64.sol";
 import "./openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./formula.sol";  // 引入 PumpFormula 合约
-import "./deposit.sol";  // 引入 Deposit 合约
+import "./tokenOperations.sol"; // 引入 TokenOperations 合约
 
 contract TokenFactory is Ownable {
     using ABDKMath64x64 for int128;
@@ -19,26 +19,7 @@ contract TokenFactory is Ownable {
     address public initialOwner;
     InitializeConfig public initializeConfig;
     QuoteTokenManager public quoteTokenManager;
-    PumpFormula public pumpFormula;  // PumpFormula 实例
-
-    address public constant WBNB_ADDRESS = 0x0dE8FCAE8421fc79B29adE9ffF97854a424Cad09;
-    address public constant USDT_ADDRESS = 0x557fD01B268b20635C1deD60622FA1185C9329E4;
-    address public constant USDC_ADDRESS = 0x64544969ed7EBf5f083679233325356EbE738930;
-    address public constant BUSD_ADDRESS = 0x78867BbEeF44f2326bF8DDd1941a4439382EF2A7;
-    address public constant DAI_ADDRESS = 0x8a9424745056Eb399FD19a0EC26A14316684e274;
-
-    struct CurveInfo {
-        address baseToken;
-        address quoteToken;
-        uint256 initVirtualQuoteReserves;
-        uint256 initVirtualBaseReserves;
-        uint256 currentQuoteReserves;
-        uint256 currentBaseReserves;
-        uint256 feeBps;
-        uint256 target; // 新增的 target 变量
-        bool isLaunchPermitted;
-        bool isOnPancake; // 替换 isOnRaydium 为 isOnPancake
-    }
+    TokenOperations public tokenOperations; // 将原来的 DepositAndWithdraw 替换为 TokenOperations
 
     uint256 public baseMinSupply;
     uint256 public baseMaxSupply;
@@ -60,9 +41,6 @@ contract TokenFactory is Ownable {
     event DebugCloneResult(address cloneAddress);
     event DebugCloneError(string reason);
     event DebugValue(string message, uint256 value);
-    event TokenPurchased(address indexed buyer, address baseToken, uint256 quoteAmount, uint256 baseAmount);
-    event TokenSold(address indexed seller, address baseToken, uint256 baseAmount, uint256 quoteAmount);
-    event PermitEvent(address indexed creator, address indexed baseToken, address indexed quoteToken, bool isLaunchPermitted, bool isOnPancake);
 
     struct TokenParams {
         string name;
@@ -82,13 +60,14 @@ contract TokenFactory is Ownable {
         address _initialOwner,
         address _initializeConfigAddress,
         address _quoteTokenManagerAddress,
-        address _pumpFormulaAddress // 添加 PumpFormula 合约地址
+        address _tokenOperationsAddress // 使用新的 TokenOperations 地址
     ) Ownable(_initialOwner) {
         implementation = _implementation;
         initialOwner = _initialOwner;
         initializeConfig = InitializeConfig(_initializeConfigAddress);
         quoteTokenManager = QuoteTokenManager(_quoteTokenManagerAddress);
-        pumpFormula = PumpFormula(_pumpFormulaAddress); // 实例化 PumpFormula
+        tokenOperations = TokenOperations(_tokenOperationsAddress); // 初始化 TokenOperations 合约
+
         updateConfig();
         emit Debug("TokenFactory Constructor Called", address(this));
     }
@@ -108,8 +87,8 @@ contract TokenFactory is Ownable {
             uint256 _baseMaxFeeRate
         ) = initializeConfig.getProgramConfig();
 
-        baseMinSupply = _baseMinSupply;  
-        baseMaxSupply = _baseMaxSupply;  
+        baseMinSupply = _baseMinSupply;
+        baseMaxSupply = _baseMaxSupply;
         createFee = _createFee;
         feeRecipientAccount = _feeRecipientAccount;
         baseMinFeeRate = _baseMinFeeRate;
@@ -141,11 +120,7 @@ contract TokenFactory is Ownable {
         address cloneInstance = Clones.clone(implementation);
         require(cloneInstance != address(0), "Clone creation failed");
 
-        // 直接使用传入的 initialSupply，无需调整
         initializeToken(cloneInstance, params);
-
-        // 每次创建新的 Token 合约实例时都调用 setFactory
-        CustomToken(cloneInstance).setFactory(address(this));
 
         QuoteTokenManager.QuoteTokenInfo memory quoteInfo = quoteTokenManager.getQuoteTokenInfo(params.quoteToken);
         require(quoteInfo.quoteMint != address(0), "Quote token not registered");
@@ -159,8 +134,9 @@ contract TokenFactory is Ownable {
             currentBaseReserves: params.initialSupply,
             feeBps: params.feeBps,
             target: params.target,
+            creator: msg.sender, // 添加creator参数
             isLaunchPermitted: params.isLaunchPermitted,
-            isOnPancake: false // 初始设置为 false
+            isOnPancake: false
         });
 
         tokenAddresses[tokenIndex] = cloneInstance;
@@ -180,7 +156,7 @@ contract TokenFactory is Ownable {
                 params.symbol,
                 initialOwner,
                 params.uri,
-                params.initialSupply, // 直接使用 initialSupply
+                params.initialSupply,
                 params.target,
                 params.initVirtualQuoteReserves,
                 params.initVirtualBaseReserves,
@@ -205,99 +181,32 @@ contract TokenFactory is Ownable {
         CurveInfo storage curve = curves[baseToken];
         require(curve.baseToken != address(0), "Curve does not exist for the provided baseToken");
 
-        // 确保 TokenFactory 和 CustomToken 的所有者一致
         require(CustomToken(baseToken).owner() == owner(), "TokenFactory and CustomToken owner mismatch");
 
         curve.currentQuoteReserves = curve.initVirtualQuoteReserves;
         curve.currentBaseReserves = curve.initVirtualBaseReserves;
 
-        // 铸造代币到工厂合约地址
         CustomToken(baseToken).mint(address(this), curve.initVirtualBaseReserves);
         emit Debug("Bonding curve accounts created", address(this));
     }
 
-    function permit(address baseToken) external {
-        CurveInfo storage curve = curves[baseToken];
-        require(curve.baseToken != address(0), "Curve does not exist for the provided baseToken");
-        
-        // 检查调用者是否为 bonding curve 的创建者
-        require(msg.sender == owner(), "Caller is not the creator of the bonding curve");
-
-        // 确保尚未将 bonding curve 设置为 PancakeSwap
-        require(!curve.isOnPancake, "Invalid parameters");
-
-        // 切换 isLaunchPermitted 状态
-        curve.isLaunchPermitted = !curve.isLaunchPermitted;
-
-        // 检查是否应将代币投放到 PancakeSwap
-        if (curve.isLaunchPermitted && curve.currentQuoteReserves >= curve.target) {
-            curve.isOnPancake = true;
-        }
-
-        emit PermitEvent(msg.sender, baseToken, curve.quoteToken, curve.isLaunchPermitted, curve.isOnPancake);
+    // 更新后的 permit 函数
+    function permit(address baseToken) external onlyOwner {
+        tokenOperations.permit(baseToken);
     }
 
-    function buyToken(address baseToken, uint256 quoteAmount) external payable {
-        CurveInfo storage curve = curves[baseToken];
-        require(curve.isLaunchPermitted, "Token launch is not permitted");
-
-        if (curve.quoteToken == WBNB_ADDRESS) {
-            require(msg.value == quoteAmount, "Incorrect BNB amount sent");
-            (bool success, ) = WBNB_ADDRESS.call{value: quoteAmount}(
-                abi.encodeWithSignature("deposit()")
-            );
-            require(success, "WBNB deposit failed");
-        } else {
-            require(IERC20(curve.quoteToken).transferFrom(msg.sender, address(this), quoteAmount), "Transfer failed");
-        }
-
-        curve.currentQuoteReserves += quoteAmount;
-
-        // 使用 PumpFormula 计算买入的基础代币数量
-        uint256 baseAmount = pumpFormula.buy(
-            curve.quoteToken,
-            curve.currentBaseReserves,
-            curve.currentQuoteReserves,
-            quoteAmount
-        );
-        require(baseAmount > 0, "Invalid base amount calculated");
-
-        CustomToken(baseToken).mint(msg.sender, baseAmount);
-        curve.currentBaseReserves += baseAmount;
-
-        emit TokenPurchased(msg.sender, baseToken, quoteAmount, baseAmount);
+    // 更新后的 buyToken 函数
+    function buyToken(
+        address baseToken, 
+        uint256 quoteAmount, 
+        uint256 minBaseAmount
+    ) external payable onlyOwner {
+        tokenOperations.buyToken{value: msg.value}(baseToken, quoteAmount, minBaseAmount);
     }
 
-    function sellToken(address baseToken, uint256 baseAmount) external {
-        CurveInfo storage curve = curves[baseToken];
-        require(curve.isLaunchPermitted, "Token launch is not permitted");
-
-        require(curve.currentBaseReserves >= baseAmount, "Not enough base reserves");
-        curve.currentBaseReserves -= baseAmount;
-        uint256 quoteAmount = pumpFormula.sell(
-            curve.quoteToken,
-            curve.currentBaseReserves,
-            curve.currentQuoteReserves,
-            baseAmount
-        );
-        require(quoteAmount > 0, "Invalid quote amount calculated");
-
-        CustomToken(baseToken).burnFrom(msg.sender, baseAmount);
-
-        if (curve.quoteToken == WBNB_ADDRESS) {
-            (bool success, ) = WBNB_ADDRESS.call(
-                abi.encodeWithSignature("withdraw(uint256)", quoteAmount)
-            );
-            require(success, "WBNB withdraw failed");
-            (success, ) = payable(msg.sender).call{value: quoteAmount}("");
-            require(success, "Transfer failed");
-        } else {
-            require(IERC20(curve.quoteToken).transfer(msg.sender, quoteAmount), "Transfer failed");
-        }
-
-        curve.currentQuoteReserves -= quoteAmount;
-
-        emit TokenSold(msg.sender, baseToken, baseAmount, quoteAmount);
+    // 更新后的 sellToken 函数
+    function sellToken(address baseToken, uint256 baseAmount) external onlyOwner {
+        tokenOperations.sellToken(baseToken, baseAmount);
     }
 
     function getAllTokenAddresses() public view returns (address[] memory) {
@@ -317,5 +226,42 @@ contract TokenFactory is Ownable {
         require(success, "Failed to set token decimals");
 
         emit DebugValue("Decimals set for token", newDecimals);
+    }
+
+    function deposit(
+        string calldata orderId,
+        string calldata command,
+        string calldata extraInfo,
+        uint8 maxIndex,
+        uint8 index,
+        uint256 cost,
+        address mint
+    ) external payable onlyOwner {
+        tokenOperations.deposit{value: msg.value}(orderId, command, extraInfo, maxIndex, index, cost, mint);
+    }
+
+    function deposit2(
+        TokenOperations.DepositParams calldata params
+    ) external payable onlyOwner {
+        tokenOperations.deposit2{value: msg.value}(params);
+    }
+
+    function withdraw(
+        address baseToken,
+        address quoteToken,
+        uint256 quoteAmount,
+        uint256 baseAmount,
+        address payable receiver
+    ) external onlyOwner {
+        tokenOperations.withdraw(baseToken, quoteToken, quoteAmount, baseAmount, receiver);
+    }
+
+    function withdraw2(
+        string calldata orderId,
+        uint256 cost,
+        address mint,
+        address payable receiver
+    ) external onlyOwner {
+        tokenOperations.withdraw2(orderId, cost, mint, receiver);
     }
 }

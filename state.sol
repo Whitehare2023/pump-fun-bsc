@@ -35,6 +35,20 @@ struct CurveInfoPart2 {
     bool isOnPancake;
 }
 
+struct CurveInfo {
+    address baseToken;
+    address quoteToken;
+    uint256 initVirtualQuoteReserves;
+    uint256 initVirtualBaseReserves;
+    uint256 currentQuoteReserves;
+    uint256 currentBaseReserves;
+    uint256 feeBps;
+    uint256 target;
+    address creator; // 添加creator字段，修复权限问题
+    bool isLaunchPermitted;
+    bool isOnPancake;
+}
+
 event CreateEventPart1(
     address indexed user,
     address indexed baseMint,
