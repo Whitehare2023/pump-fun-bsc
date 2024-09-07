@@ -2,10 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "./add_quote_token.sol";  // 引入 QuoteTokenManager 合约
-import "./ABDKMath64x64.sol"; // 引入 ABDKMath64x64 库
+import { UD60x18, ud } from "@prb/math/src/UD60x18.sol";  // 正确导入 UD60x18 库
 
 contract PumpFormula {
-    using ABDKMath64x64 for int128; // 使用 ABDKMath64x64 库
     QuoteTokenManager public quoteTokenManager;  // 引用 QuoteTokenManager 合约实例
 
     constructor(address _quoteTokenManagerAddress) {
@@ -23,23 +22,19 @@ contract PumpFormula {
 
         // 动态获取代币的精度
         uint256 decimals = quoteTokenManager.getQuoteTokenDecimals(quoteMint);
-        uint256 scalingFactor = 10**decimals;
+        UD60x18 scalingFactor = ud(10 ** decimals);  // 将 10^decimals 转换为 UD60x18 格式
 
-        // 使用 ABDKMath64x64 进行浮点数运算
-        int128 m = ABDKMath64x64.fromUInt(initVirtualQuoteReserves);
-        int128 p = ABDKMath64x64.fromUInt(currentQuoteBalance + buyQuoteAmount).mul(ABDKMath64x64.fromUInt(scalingFactor));
-        int128 n = ABDKMath64x64.fromUInt(initVirtualBaseReserves);
+        // 使用 UD60x18 进行浮点数运算
+        UD60x18 m = ud(initVirtualQuoteReserves);
+        UD60x18 p = ud(currentQuoteBalance + buyQuoteAmount).mul(scalingFactor);
+        UD60x18 n = ud(initVirtualBaseReserves);
 
-        int128 np = n.mul(p);
-        int128 mPlusP = m.add(p);
+        UD60x18 np = n.mul(p);
+        UD60x18 mPlusP = m.add(p);
 
-        int128 tokensBought = np.div(mPlusP).sub(ABDKMath64x64.fromUInt(currentBaseSupply));
+        uint256 tokensBought = np.div(mPlusP).unwrap() - currentBaseSupply;
 
-        if (tokensBought > 0) {
-            return ABDKMath64x64.toUInt(tokensBought);
-        } else {
-            return 0;
-        }
+        return tokensBought > 0 ? tokensBought : 0;
     }
 
     function sell(
@@ -55,24 +50,20 @@ contract PumpFormula {
 
         // 动态获取代币的精度
         uint256 decimals = quoteTokenManager.getQuoteTokenDecimals(quoteMint);
-        uint256 scalingFactor = 10**decimals;
+        UD60x18 scalingFactor = ud(10 ** decimals);  // 将 10^decimals 转换为 UD60x18 格式
 
-        // 使用 ABDKMath64x64 进行浮点数运算
-        int128 k = ABDKMath64x64.fromUInt(currentBaseSupply - sellBaseAmount).mul(ABDKMath64x64.fromUInt(scalingFactor));
-        int128 m = ABDKMath64x64.fromUInt(initVirtualQuoteReserves);
-        int128 n = ABDKMath64x64.fromUInt(initVirtualBaseReserves);
+        // 使用 UD60x18 进行浮点数运算
+        UD60x18 k = ud(currentBaseSupply - sellBaseAmount).mul(scalingFactor);
+        UD60x18 m = ud(initVirtualQuoteReserves);
+        UD60x18 n = ud(initVirtualBaseReserves);
 
-        int128 km = k.mul(m);
-        int128 nMinusK = n.sub(k);
+        UD60x18 km = k.mul(m);
+        UD60x18 nMinusK = n.sub(k);
 
-        require(nMinusK > 0, "nMinusK is zero, cannot divide by zero"); // 防止除以零错误
-        int128 lamportsReceived = ABDKMath64x64.fromUInt(currentQuoteBalance).sub(km.div(nMinusK));
+        require(nMinusK.unwrap() > 0, "nMinusK is zero, cannot divide by zero");
+        uint256 lamportsReceived = currentQuoteBalance - km.div(nMinusK).unwrap();
 
-        if (lamportsReceived > 0) {
-            return ABDKMath64x64.toUInt(lamportsReceived);
-        } else {
-            return 0;
-        }
+        return lamportsReceived > 0 ? lamportsReceived : 0;
     }
 
     // 从 QuoteTokenManager 获取虚拟储备值

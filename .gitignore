@@ -19,3 +19,4 @@ ignition/deployments/chain-31337
 /console
 *.md
 
+/prb-math

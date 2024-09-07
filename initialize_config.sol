@@ -9,8 +9,8 @@ contract InitializeConfig is Ownable {
 
     // ProgramConfig 实例
     ProgramConfig public programConfig;
-    uint8 public constant DECIMALS = 6;  // 代币的精度为 6
-    uint256 public constant DECIMALS_FACTOR = 10 ** DECIMALS;  // 精度因子
+    uint8 public DECIMALS;
+    uint256 public DECIMALS_FACTOR;
 
     // 构造函数，设置合约拥有者
     constructor(address initialOwner) Ownable(initialOwner) {}
@@ -28,9 +28,8 @@ contract InitializeConfig is Ownable {
     ) public onlyOwner {
         require(!programConfig.isInitialized, "Already initialized.");
 
-        // 乘以精度因子
-        uint256 adjustedBaseMinSupply = baseMinSupply * DECIMALS_FACTOR;
-        uint256 adjustedBaseMaxSupply = baseMaxSupply * DECIMALS_FACTOR;
+        uint256 adjustedBaseMinSupply = baseMinSupply;
+        uint256 adjustedBaseMaxSupply = baseMaxSupply;
 
         // 设置配置参数
         programConfig = ProgramConfig({
@@ -91,9 +90,8 @@ contract InitializeConfig is Ownable {
     function updateSupplyLimits(uint256 newBaseMinSupply, uint256 newBaseMaxSupply) external onlyOwner {
         require(newBaseMinSupply <= newBaseMaxSupply, "Min supply must be less than or equal to max supply");
 
-        // 乘以精度因子
-        uint256 adjustedNewBaseMinSupply = newBaseMinSupply * DECIMALS_FACTOR;
-        uint256 adjustedNewBaseMaxSupply = newBaseMaxSupply * DECIMALS_FACTOR;
+        uint256 adjustedNewBaseMinSupply = newBaseMinSupply;
+        uint256 adjustedNewBaseMaxSupply = newBaseMaxSupply;
 
         programConfig.baseMinSupply = adjustedNewBaseMinSupply;
         programConfig.baseMaxSupply = adjustedNewBaseMaxSupply;

@@ -12,6 +12,7 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
     bool private factorySet = false; // 标记 factory 是否已经设置
 
     address public factory; // TokenFactory 合约地址
+    address public operations; // TokenOperations 合约地址
     address public factoryOwner; // TokenFactory 的 owner 地址
 
     // 额外添加的状态变量
@@ -124,14 +125,20 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         factorySet = true; // 设置 factory 已经设置
     }
 
-    // 自定义修饰符，确保只有 factory 地址能调用
-    modifier onlyFactory() {
-        require(msg.sender == factory, "Caller is not the factory");
+    // 设置 operations 地址
+    function setOperations(address _operations) external {
+        require(_operations != address(0), "Operations address is invalid");
+        operations = _operations;
+    }
+
+    // 自定义修饰符，确保只有 factory 或 operations 地址能调用
+    modifier onlyFactoryOrOperations() {
+        require(msg.sender == factory || msg.sender == operations, "Caller is not the factory or operations");
         _;
     }
 
-    // 修改后的 mint 方法，只允许 factory 调用
-    function mint(address to, uint256 amount) external onlyFactory {
+    // 修改后的 mint 方法，只允许 factory 或 operations 调用
+    function mint(address to, uint256 amount) external onlyFactoryOrOperations {
         require(to != address(0), "Mint to the zero address"); // 确保目标地址不为空
         require(amount > 0, "Mint amount must be greater than zero"); // 确保 mint 数量大于零
         require(initialized, "Token is not initialized"); // 确保合约已被初始化

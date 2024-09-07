@@ -118,27 +118,6 @@ event TradeEventPart9(
     uint256 baseCost
 );
 
-event WithdrawEvent(
-    address indexed quoteMint,
-    address indexed baseMint,
-    uint256 quoteAmount,
-    uint256 baseAmount,
-    uint256 timestamp,
-    address indexed receiver
-);
-
-event DepositEvent(
-    address indexed user,
-    address indexed mint,
-    uint256 cost,
-    string orderId,
-    string command,
-    string extraInfo,
-    uint8 maxIndex,
-    uint8 index,
-    uint256 timestamp
-);
-
 // 拆分后的 DepositEvent2
 event DepositEvent2Part1(
     address indexed user,
