@@ -3,12 +3,11 @@ pragma solidity ^0.8.20;
 
 import "./openzeppelin-contracts/contracts/access/Ownable.sol";
 import "./openzeppelin-contracts/contracts/proxy/Clones.sol";
-import "./customToken1.sol";
+import "./customToken.sol";
 import "./initialize_config.sol";
 import "./add_quote_token.sol";
 import "./state.sol"; 
 import "./openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "./formula.sol";  
 import "./tokenOperations.sol"; 
 
 contract TokenFactory is Ownable {
@@ -128,7 +127,7 @@ contract TokenFactory is Ownable {
         );
     }
 
-    function createToken(TokenParams memory params) external payable onlyOwner returns (address) {
+    function createToken(TokenParams memory params) external payable returns (address) {
         // 更新配置
         updateConfig();
         
@@ -235,12 +234,14 @@ contract TokenFactory is Ownable {
         address baseToken, 
         uint256 quoteAmount, 
         uint256 minBaseAmount
-    ) external payable onlyOwner {
-        tokenOperations.buyToken{value: msg.value}(baseToken, quoteAmount, minBaseAmount);
+    ) external payable {
+        // 将 msg.sender 作为 userAddress 传入
+        tokenOperations.buyToken{value: msg.value}(baseToken, quoteAmount, minBaseAmount, msg.sender);
     }
 
     function sellToken(address baseToken, uint256 baseAmount) external onlyOwner {
-        tokenOperations.sellToken(baseToken, baseAmount);
+        // 将 msg.sender 作为 userAddress 传入
+        tokenOperations.sellToken(baseToken, baseAmount, msg.sender);
     }
 
     function getAllTokenAddresses() public view returns (address[] memory) {
@@ -261,41 +262,40 @@ contract TokenFactory is Ownable {
 
         emit DebugValue("Decimals set for token", newDecimals);
     }
-
+    
+        // Deposit 功能
     function deposit(
-        string calldata orderId,
-        string calldata command,
-        string calldata extraInfo,
-        uint8 maxIndex,
-        uint8 index,
         uint256 cost,
         address mint
-    ) external payable onlyOwner {
-        tokenOperations.deposit{value: msg.value}(orderId, command, extraInfo, maxIndex, index, cost, mint);
+    ) external payable  {
+        // 将 msg.sender 作为 userAddress 传入
+        tokenOperations.deposit{value: msg.value}(cost, mint, msg.sender);
     }
 
     function deposit2(
         TokenOperations.DepositParams calldata params
-    ) external payable onlyOwner {
+    ) external payable  {
+        // 将 msg.sender 作为 userAddress 传入
         tokenOperations.deposit2{value: msg.value}(params);
     }
 
+    // Withdraw 功能
     function withdraw(
         address baseToken,
         address quoteToken,
         uint256 quoteAmount,
         uint256 baseAmount,
         address payable receiver
-    ) external onlyOwner {
+    ) external  {
         tokenOperations.withdraw(baseToken, quoteToken, quoteAmount, baseAmount, receiver);
     }
 
     function withdraw2(
-        string calldata orderId,
         uint256 cost,
         address mint,
         address payable receiver
-    ) external onlyOwner {
-        tokenOperations.withdraw2(orderId, cost, mint, receiver);
+    ) external  {
+        tokenOperations.withdraw2(cost, mint, receiver);
     }
+
 }

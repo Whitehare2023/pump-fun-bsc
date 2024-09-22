@@ -128,7 +128,6 @@ event DepositEvent2Part1(
 
 event DepositEvent2Part2(
     uint256 cost2,
-    string orderId,
     string command,
     string extraInfo,
     uint8 maxIndex,
@@ -141,6 +140,5 @@ event Withdraw2Event(
     address indexed receiverAccount,
     address indexed mint,
     uint256 cost,
-    string orderId,
     uint256 timestamp
 );
