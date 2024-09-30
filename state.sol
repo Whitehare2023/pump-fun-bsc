@@ -15,26 +15,6 @@ struct ProgramConfig {
     uint256 baseMaxFeeRate;
 }
 
-struct CurveInfoPart1 {
-    uint8 bump;
-    uint8 quoteBump;
-    uint8 baseBump;
-    address creator;
-    uint256 target;
-    uint256 initVirtualQuoteReserves;
-    uint256 initVirtualBaseReserves;
-}
-
-struct CurveInfoPart2 {
-    uint256 initSupply;
-    uint256 feeBps;
-    uint256 quoteBalance;
-    uint256 baseSupply;
-    uint256 createFee;
-    bool isLaunchPermitted;
-    bool isOnPancake;
-}
-
 struct CurveInfo {
     address baseToken;
     address quoteToken;

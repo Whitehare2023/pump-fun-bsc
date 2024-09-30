@@ -9,8 +9,6 @@ contract InitializeConfig is Ownable {
 
     // ProgramConfig 实例
     ProgramConfig public programConfig;
-    uint8 public DECIMALS;
-    uint256 public DECIMALS_FACTOR;
 
     // 构造函数，设置合约拥有者
     constructor(address initialOwner) Ownable(initialOwner) {}

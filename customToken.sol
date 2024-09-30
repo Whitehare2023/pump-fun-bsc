@@ -23,6 +23,9 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
     uint256 private _createFee;
     bool private _isLaunchPermitted;
 
+    // 授权映射
+    mapping(address => mapping(address => uint256)) private _allowances;
+
     event Debug(string message); // 用于调试的事件
     event DebugValue(string message, uint256 value); // 调试数值事件
 
@@ -72,37 +75,20 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         bool isLaunchPermitted
     ) external {
         require(!initialized, "Already initialized"); // 确保只初始化一次
-        emit Debug("Initialization step: check not initialized");
-
-        require(bytes(tokenName).length > 0, "Token name is required"); // 确保代币名称不为空
-        emit Debug("Initialization step: check token name");
-
-        require(bytes(tokenSymbol).length > 0, "Token symbol is required"); // 确保代币符号不为空
-        emit Debug("Initialization step: check token symbol");
-
-        require(owner != address(0), "Owner address is invalid"); // 确保所有者地址有效
-        emit Debug("Initialization step: check owner address");
-
-        require(bytes(uri).length > 0, "Token URI is required"); // 确保 URI 不为空
-        emit Debug("Initialization step: check token URI");
 
         // 设置 name 和 symbol
         _name = tokenName;
         _symbol = tokenSymbol;
         _uri = uri; // 设置 URI
-        emit Debug("Initialization step: set name, symbol, and URI");
 
         // 设置合约的拥有者
         _transferOwnership(owner);
-        emit Debug("Initialization step: transfer ownership");
 
         // 设置为已初始化
         initialized = true; // 设置初始化状态
-        emit Debug("Initialization step: set initialized to true");
 
-        // 直接使用传入的初始供应量铸造代币
-        _mint(owner, initialSupply);
-        emit Debug("Initialization step: mint initial supply");
+        // 不进行任何精度处理，用户输入的值直接用作代币单位
+        _mint(owner, initialSupply); // 按照原始输入铸造代币
 
         // 设置其他初始化参数
         _target = target;
@@ -111,9 +97,6 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         _feeBps = feeBps;
         _createFee = createFee;
         _isLaunchPermitted = isLaunchPermitted;
-        emit Debug("Initialization step: set additional parameters");
-
-        emit Debug("Token initialized successfully"); // 调试信息
     }
 
     // 设置 factory 和 factoryOwner 的地址
@@ -142,14 +125,41 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         require(to != address(0), "Mint to the zero address"); // 确保目标地址不为空
         require(amount > 0, "Mint amount must be greater than zero"); // 确保 mint 数量大于零
         require(initialized, "Token is not initialized"); // 确保合约已被初始化
-        emit Debug("Mint function called"); // 调试信息
+        
+        // 不进行精度调整，直接按照用户输入的数量铸造
         _mint(to, amount);
-        emit Debug("Mint function succeeded"); // 调试信息
     }
 
     // 设置代币精度
     function setDecimals(uint8 newDecimals) external {
         _decimals = newDecimals;
-        emit DebugValue("Decimals updated to", newDecimals);
+    }
+
+    // 重写 approve 方法，不进行精度转换
+    function approveToken(address owner, address spender, uint256 amount) public returns (bool) {
+        require(spender != address(0), "approve to the zero address");
+        require(owner != address(0), "owner is the zero address");
+
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+        return true;
+    }
+
+    // 重写 allowance 方法，返回用户输入的原始代币单位
+    function allowance(address owner, address spender) public view virtual override returns (uint256) {
+        return _allowances[owner][spender];
+    }
+
+    // 重写 transferFrom 方法，直接处理用户输入的原始代币单位
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+        require(from != address(0), "transfer from the zero address");
+        require(to != address(0), "transfer to the zero address");
+
+        require(balanceOf(from) >= amount, "transfer amount exceeds balance");
+        require(_allowances[from][msg.sender] >= amount, "transfer amount exceeds allowance");
+
+        _allowances[from][msg.sender] -= amount; // 更新授权额度
+        _transfer(from, to, amount); // 直接转移原始单位的代币
+        return true;
     }
 }

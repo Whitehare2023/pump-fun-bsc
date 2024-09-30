@@ -8,7 +8,7 @@ import "./initialize_config.sol";
 import "./add_quote_token.sol";
 import "./state.sol"; 
 import "./openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import "./tokenOperations.sol"; 
+import "./tokenOperations.sol";
 
 contract TokenFactory is Ownable {
 
@@ -16,7 +16,7 @@ contract TokenFactory is Ownable {
     address public initialOwner;
     InitializeConfig public initializeConfig;
     QuoteTokenManager public quoteTokenManager;
-    TokenOperations public tokenOperations; 
+    TokenOperations public tokenOperations;
     uint8 public decimals; 
 
     uint256 public baseMinSupply;
@@ -57,13 +57,13 @@ contract TokenFactory is Ownable {
         address _initialOwner,
         address _initializeConfigAddress,
         address _quoteTokenManagerAddress,
-        address _tokenOperationsAddress // 使用新的 TokenOperations 地址
+        address _tokenOperationsAddress
     ) Ownable(_initialOwner) {
         implementation = _implementation;
         initialOwner = _initialOwner;
         initializeConfig = InitializeConfig(_initializeConfigAddress);
         quoteTokenManager = QuoteTokenManager(_quoteTokenManagerAddress);
-        tokenOperations = TokenOperations(_tokenOperationsAddress); 
+        tokenOperations = TokenOperations(_tokenOperationsAddress);
         decimals = 6; 
         updateConfig();
 
@@ -128,7 +128,6 @@ contract TokenFactory is Ownable {
     }
 
     function createToken(TokenParams memory params) external payable returns (address) {
-        // 更新配置
         updateConfig();
         
         // 确保创建费正确
@@ -141,8 +140,6 @@ contract TokenFactory is Ownable {
         require(params.initialSupply >= baseMinSupply && params.initialSupply <= baseMaxSupply, "Initial supply out of range");
         require(params.feeBps >= baseMinFeeRate && params.feeBps <= baseMaxFeeRate, "Fee Bps out of range");
 
-        uint256 adjustedInitialSupply = params.initialSupply * (10 ** decimals);
-
         // 转移创建费
         (bool feeTransferSuccess, ) = payable(feeRecipientAccount).call{value: createFee}("");
         require(feeTransferSuccess, "Fee transfer failed");
@@ -152,7 +149,7 @@ contract TokenFactory is Ownable {
         require(cloneInstance != address(0), "Clone creation failed");
 
         // 初始化代币
-        initializeToken(cloneInstance, params, adjustedInitialSupply);
+        initializeToken(cloneInstance, params, params.initialSupply);
 
         // 设置小数位
         CustomToken(cloneInstance).setDecimals(decimals);
@@ -160,7 +157,7 @@ contract TokenFactory is Ownable {
         // 设置 factory 地址
         CustomToken(cloneInstance).setFactory(address(this));
 
-        // 这里新增设置 operations 地址的调用
+        // 设置 operations 地址
         CustomToken(cloneInstance).setOperations(address(tokenOperations));
 
         // 确保 quoteToken 已注册
@@ -184,12 +181,12 @@ contract TokenFactory is Ownable {
         tokenIndex++;
 
         // 触发事件
-        emit TokenCreated(cloneInstance, params.name, params.symbol, adjustedInitialSupply, initialOwner);
+        emit TokenCreated(cloneInstance, params.name, params.symbol, params.initialSupply, initialOwner);
 
         return cloneInstance;
     }
 
-    function initializeToken(address cloneInstance, TokenParams memory params, uint256 adjustedInitialSupply) internal {
+    function initializeToken(address cloneInstance, TokenParams memory params, uint256 initialSupply) internal {
         emit DebugInitializeParams(params.name, params.symbol, initialOwner, params.uri);
 
         (bool success, bytes memory data) = cloneInstance.call(
@@ -199,7 +196,7 @@ contract TokenFactory is Ownable {
                 params.symbol,
                 initialOwner,
                 params.uri,
-                adjustedInitialSupply,
+                initialSupply,
                 params.target,
                 params.initVirtualQuoteReserves,
                 params.initVirtualBaseReserves,
@@ -220,27 +217,25 @@ contract TokenFactory is Ownable {
         }
     }
 
-    function initializeBondingCurve(address baseToken) external onlyOwner {
-        CurveInfo memory curve = tokenOperations.getCurveInfo(baseToken);
+    // function initializeBondingCurve(address baseToken) external onlyOwner {
+    //     CurveInfo memory curve = tokenOperations.getCurveInfo(baseToken);
 
-        require(curve.baseToken != address(0), "Curve does not exist for the provided baseToken");
-        require(CustomToken(baseToken).owner() == owner(), "TokenFactory and CustomToken owner mismatch");
+    //     require(curve.baseToken != address(0), "Curve does not exist for the provided baseToken");
+    //     require(CustomToken(baseToken).owner() == owner(), "TokenFactory and CustomToken owner mismatch");
 
-        CustomToken(baseToken).mint(address(this), curve.initVirtualBaseReserves);
-        emit Debug("Bonding curve accounts created", address(this));
-    }
+    //     CustomToken(baseToken).mint(address(this), curve.initVirtualBaseReserves);
+    //     emit Debug("Bonding curve accounts created", address(this));
+    // }
 
     function buyToken(
         address baseToken, 
         uint256 quoteAmount, 
         uint256 minBaseAmount
     ) external payable {
-        // 将 msg.sender 作为 userAddress 传入
         tokenOperations.buyToken{value: msg.value}(baseToken, quoteAmount, minBaseAmount, msg.sender);
     }
 
     function sellToken(address baseToken, uint256 baseAmount) external onlyOwner {
-        // 将 msg.sender 作为 userAddress 传入
         tokenOperations.sellToken(baseToken, baseAmount, msg.sender);
     }
 
@@ -263,19 +258,17 @@ contract TokenFactory is Ownable {
         emit DebugValue("Decimals set for token", newDecimals);
     }
     
-        // Deposit 功能
+    // Deposit 功能
     function deposit(
         uint256 cost,
         address mint
     ) external payable  {
-        // 将 msg.sender 作为 userAddress 传入
         tokenOperations.deposit{value: msg.value}(cost, mint, msg.sender);
     }
 
     function deposit2(
         TokenOperations.DepositParams calldata params
     ) external payable  {
-        // 将 msg.sender 作为 userAddress 传入
         tokenOperations.deposit2{value: msg.value}(params);
     }
 
@@ -298,4 +291,14 @@ contract TokenFactory is Ownable {
         tokenOperations.withdraw2(cost, mint, receiver);
     }
 
+    // 用户传入完整的代币数量
+    function approveToken(address owner, address token, uint256 amount, address spender) external {
+        require(CustomToken(token).approveToken(owner, spender, amount), "Approve failed");
+        emit DebugValue("Approved amount", amount);
+    }
+
+    function permit(address baseToken) external {
+        // 调用 TokenOperations 合约中的 permit 函数
+        tokenOperations.permit(baseToken);
+    }
 }
