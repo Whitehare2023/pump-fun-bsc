@@ -2,13 +2,13 @@
 pragma solidity ^0.8.20;
 
 import "./openzeppelin-contracts/contracts/access/Ownable.sol";
+import "./openzeppelin-contracts/contracts/token/ERC20/ERC20.sol"; // 引入 IERC20 接口以调用 decimals()
 
 contract QuoteTokenManager is Ownable {
     struct QuoteTokenInfo {
         address quoteMint;
         uint8 decimals; // 用于存储代币的精度
         address feeRecipientAccount;
-        address feeRecipientQuote;
     }
 
     // 存储支持的报价代币信息
@@ -16,35 +16,34 @@ contract QuoteTokenManager is Ownable {
     // 用于存储所有 quoteMint 的数组
     address[] public quoteMints;
 
-    event QuoteTokenAdded(address indexed quoteMint, uint8 decimals, address feeRecipientAccount, address feeRecipientQuote);
+    event QuoteTokenAdded(address indexed quoteMint, uint8 decimals, address feeRecipientAccount);
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
     function addQuoteToken(
         address quoteMint,
-        uint8 decimals,
-        address feeRecipientAccount,
-        address feeRecipientQuote
+        address feeRecipientAccount
     ) external onlyOwner {
         require(quoteMint != address(0), "Invalid quote mint address");
         require(feeRecipientAccount != address(0), "Invalid fee recipient address");
-        require(feeRecipientQuote != address(0), "Invalid fee recipient quote address");
 
         // 确保没有重复添加
         require(quoteTokens[quoteMint].quoteMint == address(0), "Quote token already added");
 
-        // 存储新的报价代币信息，包括精度
+        // 通过 IERC20 接口调用 decimals() 函数自动获取精度
+        uint8 decimals = ERC20(quoteMint).decimals();
+
+        // 存储新的报价代币信息，包括自动获取的精度
         quoteTokens[quoteMint] = QuoteTokenInfo({
             quoteMint: quoteMint,
-            decimals: decimals, // 存储精度
-            feeRecipientAccount: feeRecipientAccount,
-            feeRecipientQuote: feeRecipientQuote
+            decimals: decimals, // 存储自动获取的精度
+            feeRecipientAccount: feeRecipientAccount
         });
 
         // 添加到 quoteMints 数组中
         quoteMints.push(quoteMint);
 
-        emit QuoteTokenAdded(quoteMint, decimals, feeRecipientAccount, feeRecipientQuote);
+        emit QuoteTokenAdded(quoteMint, decimals, feeRecipientAccount);
     }
 
     function getQuoteTokenInfo(address quoteMint) external view returns (QuoteTokenInfo memory) {
@@ -79,5 +78,4 @@ contract QuoteTokenManager is Ownable {
             }
         }
     }
-
 }

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "./openzeppelin-contracts/contracts/access/Ownable.sol";
 import "./openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "./customToken.sol"; // 引入 CustomToken 合约
 import "./add_quote_token.sol"; // 引入 QuoteTokenManager 合约
 import "./state.sol";
+import "./initialize_config.sol";
 import { UD60x18, ud } from "@prb/math/src/UD60x18.sol";  // 引入 PRBMathUD60x18 库
 
-contract TokenOperations is Ownable {
+contract TokenOperations {
     QuoteTokenManager public quoteTokenManager; // 引入 QuoteTokenManager 实例
+    InitializeConfig public initializeConfig;  // 添加 initializeConfig 实例
 
-    address public depositAccount;
     address public factory; // TokenFactory 合约地址
     bool private factorySet = false; // 确保 factory 只能设置一次
 
@@ -20,34 +20,16 @@ contract TokenOperations is Ownable {
 
     // 代币地址，默认初始化为测试网地址
     address public WBNB_ADDRESS = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;
-    address public USDT_ADDRESS = 0x7ef95A0fEab5e1dA0041a2FD6B44cF59FFbEEf2B;
-    address public USDC_ADDRESS = 0x64544969ed7EBf5f083679233325356EbE738930;
-    address public BUSD_ADDRESS = 0x78867BbEeF44f2326bF8DDd1941a4439382EF2A7;
-    address public DAI_ADDRESS = 0x8a9424745056Eb399FD19a0EC26A14316684e274;
-
-    bool private addressesSet = false; // 确保地址只能设置一次
 
     mapping(address => CurveInfo) public curves; // 将 curves 迁移到 TokenOperations
 
-    event Debug(string message, address addr);
-    event DebugValue(string message, uint256 value);
-    event PermitEvent(address indexed creator, address indexed baseToken, address indexed quoteToken, bool isLaunchPermitted, bool isOnPancake);
-    event DepositEvent(address indexed user, address indexed mint, uint256 cost, string orderId, string command, string extraInfo, uint8 maxIndex, uint8 index, uint256 timestamp);
-    event WithdrawEvent(address indexed quoteToken, address indexed baseToken, uint256 quoteAmount, uint256 baseAmount, uint256 timestamp, address receiver);
-    event TokenPurchased(address indexed buyer, address baseToken, uint256 quoteAmount, uint256 baseAmount, uint256 currentQuoteReserves, uint256 currentBaseReserves, uint256 timestamp);
-    event TokenSold(address indexed seller, address baseToken, uint256 baseAmount, uint256 quoteAmount);
-
-    struct DepositParams {
-        string command;
-        string extraInfo;
-        uint8 maxIndex;
-        uint8 index;
-        uint256 cost1;
-        uint256 cost2;
-        address mint1;
-        address mint2;
-        address userAddress;
-    }
+    // event Debug(string message, address addr);
+    // event DebugValue(string message, uint256 value);
+    // event PermitEvent(address indexed creator, address indexed baseToken, address indexed quoteToken, bool isLaunchPermitted, bool isOnPancake);
+    // event DepositEvent(address indexed user, address indexed mint, uint256 cost, string orderId, string command, string extraInfo, uint8 maxIndex, uint8 index, uint256 timestamp);
+    // event WithdrawEvent(address indexed quoteToken, address indexed baseToken, uint256 quoteAmount, uint256 baseAmount, uint256 timestamp, address receiver);
+    // event TokenPurchased(address indexed buyer, address baseToken, uint256 quoteAmount, uint256 baseAmount, uint256 currentQuoteReserves, uint256 currentBaseReserves, uint256 timestamp);
+    // event TokenSold(address indexed seller, address baseToken, uint256 baseAmount, uint256 quoteAmount);
 
     // 自定义修饰符，确保只有 factory 地址能调用
     modifier onlyFactory() {
@@ -60,7 +42,18 @@ contract TokenOperations is Ownable {
         return curves[baseToken];
     }
 
-    // 设置 factory 和 factoryOwner 的地址
+    function getDepositAccount() public view returns(address _depositAccount) {
+        _depositAccount = initializeConfig.depositAccount();
+        return _depositAccount;
+    }
+
+    // 在构造函数中初始化 isTestnet，并调用 setTokenAddresses 和初始化 QuoteTokenManager
+    constructor(address _quoteTokenManager, address _initializeConfig) {
+        quoteTokenManager = QuoteTokenManager(_quoteTokenManager); // 初始化 quoteTokenManager
+        initializeConfig = InitializeConfig(_initializeConfig);
+    }
+
+    // 设置 factory 地址，只能设置一次
     function setFactory(address _factory) external {
         require(!factorySet, "Factory already set"); // 确保只设置一次
         require(_factory != address(0), "Factory address is invalid");
@@ -68,24 +61,17 @@ contract TokenOperations is Ownable {
         factorySet = true; // 设置 factory 已经设置
     }
 
-    // 在构造函数中初始化 isTestnet，并调用 setTokenAddresses 和初始化 QuoteTokenManager
-    constructor(address _depositAccount, address _quoteTokenManager, bool isTestnet) Ownable(msg.sender) {
-        depositAccount = _depositAccount;
-        quoteTokenManager = QuoteTokenManager(_quoteTokenManager); // 初始化 quoteTokenManager
-        setTokenAddresses(isTestnet); // 构造时立即设置代币地址
-    }
-
-    function setTokenAddresses(bool isTestnet) internal {
-        if (!isTestnet) {
-            // 如果是主网，使用主网地址
-            WBNB_ADDRESS = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c; // WBNB Mainnet
-            USDT_ADDRESS = 0x55d398326f99059fF775485246999027B3197955; // USDT Mainnet
-            USDC_ADDRESS = 0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d; // USDC Mainnet
-            BUSD_ADDRESS = 0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56; // BUSD Mainnet
-            DAI_ADDRESS = 0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3; // DAI Mainnet
-            pancakeAddress = 0x10ED43C718714eb63d5aA57B78B54704E256024E; // PancakeSwap Router Mainnet
-        }
-        addressesSet = true; // 设置代币地址已被设置
+    // 初始化函数，用于设置 TokenOperations 的必要地址
+    function initialize(
+        address _quoteTokenManager,        // 传入 quoteTokenManager 的地址
+        address _initializeConfig,         // 传入 initializeConfig 的地址
+        address _pancakeAddress,           // pancakeAddress
+        address _WBNB_ADDRESS              // WBNB_ADDRESS
+    ) external onlyFactory {
+        quoteTokenManager = QuoteTokenManager(_quoteTokenManager);
+        initializeConfig = InitializeConfig(_initializeConfig);
+        pancakeAddress = _pancakeAddress;
+        WBNB_ADDRESS = _WBNB_ADDRESS;
     }
 
     function initializeCurve(
@@ -113,10 +99,10 @@ contract TokenOperations is Ownable {
         });
     }
 
-    function permit(address baseToken) external onlyFactory {
+    function permit(address baseToken, address userAddress) external onlyFactory {
         CurveInfo storage curve = curves[baseToken];
         require(curve.baseToken != address(0), "Curve does not exist for the provided baseToken");
-        require(owner() == curve.creator, "Caller is not the creator of the bonding curve");
+        require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
         require(!curve.isOnPancake, "Invalid parameters");
 
         curve.isLaunchPermitted = !curve.isLaunchPermitted;
@@ -125,7 +111,6 @@ contract TokenOperations is Ownable {
             curve.isOnPancake = true;
         }
 
-        emit PermitEvent(msg.sender, baseToken, curve.quoteToken, curve.isLaunchPermitted, curve.isOnPancake);
     }
 
     function buyToken(
@@ -135,13 +120,14 @@ contract TokenOperations is Ownable {
         address userAddress
     ) external payable onlyFactory {
         CurveInfo storage curve = curves[baseToken];
-        require(owner() == curve.creator, "Caller is not the creator of the bonding curve");
+        require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
         require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
 
-        // 获取代币的精度
-        uint8 tokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
+        // 获取 quoteToken 和 baseToken 的精度
+        uint8 quoteTokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
+        uint8 baseTokenDecimals = CustomToken(baseToken).decimals();
 
-        // 检查并处理 WBNB
+        // 处理 WBNB 或其他 quoteToken 的转移
         if (curve.quoteToken == WBNB_ADDRESS) {
             require(msg.value == quoteAmount, "Incorrect BNB amount sent");
             (bool success, ) = WBNB_ADDRESS.call{value: quoteAmount}(abi.encodeWithSignature("deposit()"));
@@ -152,57 +138,120 @@ contract TokenOperations is Ownable {
             require(IERC20(curve.quoteToken).transferFrom(userAddress, address(this), quoteAmount), "Transfer failed");
         }
 
-        // 调用 calculateTokensBought 函数，计算购买的基础代币数量
+        // 计算手续费并更新 quoteAmount
+        uint256 feeAmount = (quoteAmount * curve.feeBps) / 10000;
+        uint256 newQuoteAmount = quoteAmount - feeAmount;
+
+        // 将手续费转移到指定的 feeRecipientAccount
+        require(IERC20(curve.quoteToken).transfer(initializeConfig.feeRecipientAccount(), feeAmount), "Fee transfer failed");
+
+        // 计算购买的 baseToken 数量，使用新的逻辑
         uint256 baseAmount = calculateTokensBought(
             curve.initVirtualQuoteReserves,
             curve.initVirtualBaseReserves,
             curve.currentBaseReserves,
             curve.currentQuoteReserves,
-            quoteAmount,
-            tokenDecimals  // 传入代币精度
+            newQuoteAmount,
+            quoteTokenDecimals,
+            baseTokenDecimals
         );
 
         require(baseAmount >= minBaseAmount, "Slippage too high, minBaseAmount not met");
 
-        // 铸造基础代币并分发给用户
-        CustomToken(baseToken).mint(userAddress, baseAmount);
+        // 从 bondingCurveBase 转移 baseToken 给用户
+        require(IERC20(baseToken).transferFrom(address(this), userAddress, baseAmount), "Base token transfer failed");
 
-        // 更新储备（使用原始单位）
-        curve.currentQuoteReserves += quoteAmount;
+        // 更新储备
+        curve.currentQuoteReserves += newQuoteAmount;
         curve.currentBaseReserves += baseAmount;
 
-        // 检查是否需要上线 PancakeSwap
-        if (curve.currentQuoteReserves >= curve.target && !curve.isOnPancake) {
+        // 检查是否达到 PancakeSwap 的上线条件
+        if (curve.isLaunchPermitted && curve.currentQuoteReserves >= curve.target && !curve.isOnPancake) {
             curve.isOnPancake = true;
         }
 
+        // 触发事件
+        // emit TokenPurchased(userAddress, baseToken, newQuoteAmount, baseAmount, curve.currentQuoteReserves, curve.currentBaseReserves, block.timestamp);
     }
 
+    // 新的 calculateTokensBought 函数逻辑
     function calculateTokensBought(
         uint256 initVirtualQuoteReserves,
         uint256 initVirtualBaseReserves,
         uint256 currentBaseSupply,
         uint256 currentQuoteBalance,
         uint256 buyQuoteAmount,
-        uint8 tokenDecimals  // 代币的精度
+        uint8 quoteTokenDecimals,
+        uint8 baseTokenDecimals
     ) internal pure returns (uint256) {
-        uint256 scalingFactor = 10**(18 - tokenDecimals);  // 调整为 18 位精度
-        uint256 fullPrecisionFactor = 10**18;  // 18 位精度的标准因子
-
-        // 将输入统一转换为 18 位精度的最小单位
-        UD60x18 m = ud(initVirtualQuoteReserves * fullPrecisionFactor);  // 初始虚拟报价储备
-        UD60x18 p = ud((currentQuoteBalance + buyQuoteAmount) * fullPrecisionFactor);  // 当前报价余额 + 购买金额
-        UD60x18 n = ud(initVirtualBaseReserves * fullPrecisionFactor);  // 初始虚拟基础储备
+        // 动态调整精度因子，确保所有数值统一到 18 位小数精度
+        uint256 scalingFactorQuote = 10**(18 - quoteTokenDecimals);  // 调整为 18 位精度
+        uint256 scalingFactorBase = 10**(18 - baseTokenDecimals);    // 调整为 18 位精度
 
         // 计算 np 和 mPlusP
-        UD60x18 np = n.mul(p);
-        UD60x18 mPlusP = m.add(p);
+        uint256 npResult = calculateNp(
+            initVirtualBaseReserves,
+            currentQuoteBalance,
+            buyQuoteAmount,
+            scalingFactorQuote,
+            scalingFactorBase
+        );
 
-        // 计算出的 tokensBought 需要减去 currentBaseSupply 的精度处理
-        UD60x18 tokensBought = np.div(mPlusP).sub(ud(currentBaseSupply * fullPrecisionFactor));
+        uint256 mPlusPResult = calculateMPlusP(
+            initVirtualQuoteReserves,
+            currentQuoteBalance,
+            buyQuoteAmount,
+            scalingFactorQuote
+        );
 
-        // 返回结果前，将数值转换回原始代币精度
-        return tokensBought.unwrap() / (scalingFactor * 10 ** tokenDecimals);
+        return calculateFinalTokensBought(
+            npResult,
+            mPlusPResult,
+            currentBaseSupply,
+            scalingFactorBase,
+            baseTokenDecimals
+        );
+    }
+
+    // 分开的第一步：计算 np (n * p)
+    function calculateNp(
+        uint256 initVirtualBaseReserves,
+        uint256 currentQuoteBalance,
+        uint256 buyQuoteAmount,
+        uint256 scalingFactorQuote,
+        uint256 scalingFactorBase
+    ) internal pure returns (uint256) {
+        UD60x18 p = ud((currentQuoteBalance + buyQuoteAmount) * scalingFactorQuote);  // p
+        UD60x18 n = ud(initVirtualBaseReserves * scalingFactorBase);  // n
+        UD60x18 np = n.mul(p);  // n * p
+        return np.unwrap();
+    }
+
+    // 分开的第二步：计算 mPlusP (m + p)
+    function calculateMPlusP(
+        uint256 initVirtualQuoteReserves,
+        uint256 currentQuoteBalance,
+        uint256 buyQuoteAmount,
+        uint256 scalingFactorQuote
+    ) internal pure returns (uint256) {
+        UD60x18 m = ud(initVirtualQuoteReserves * scalingFactorQuote);  // m
+        UD60x18 p = ud((currentQuoteBalance + buyQuoteAmount) * scalingFactorQuote);  // p
+        UD60x18 mPlusP = m.add(p);  // m + p
+        return mPlusP.unwrap();
+    }
+
+    // 分开的第三步：计算最终的 tokensBought
+    function calculateFinalTokensBought(
+        uint256 npResult,
+        uint256 mPlusPResult,
+        uint256 currentBaseSupply,
+        uint256 scalingFactorBase,
+        uint8 baseTokenDecimals
+    ) internal pure returns (uint256) {
+        UD60x18 np = ud(npResult);
+        UD60x18 mPlusP = ud(mPlusPResult);
+        UD60x18 tokensBought = np.div(mPlusP).sub(ud(currentBaseSupply * scalingFactorBase));
+        return tokensBought.unwrap() / (10**(18 - baseTokenDecimals));  // 还原精度
     }
 
     function sellToken(
@@ -211,47 +260,57 @@ contract TokenOperations is Ownable {
         address userAddress
     ) external onlyFactory {
         CurveInfo storage curve = curves[baseToken];
-        require(curve.isLaunchPermitted, "Token launch is not permitted");
+        require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
         require(curve.currentBaseReserves >= baseAmount, "Not enough base reserves");
 
-        // 获取代币的精度
-        uint256 decimals = quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken);
-        uint256 precisionFactor = 10**(18 - decimals);  // 动态根据代币精度计算缩放因子
+        // 获取 quoteToken 和 baseToken 的精度
+        uint8 quoteTokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
+        uint8 baseTokenDecimals = CustomToken(baseToken).decimals();
 
-        // 调整 baseAmount 到代币最小单位
-        uint256 adjustedBaseAmount = baseAmount * precisionFactor;
-
-        // 计算卖出时获得的报价代币数量
+        // 调用拆分后的计算函数来计算获得的 quoteAmount
         uint256 quoteAmount = calculateTokensSold(
-            curve.initVirtualQuoteReserves * precisionFactor,   // 调整虚拟储备的精度
-            curve.initVirtualBaseReserves * precisionFactor,
-            curve.currentBaseReserves * precisionFactor,        // 调整当前基础储备的精度
-            curve.currentQuoteReserves * precisionFactor,       // 调整当前报价储备的精度
-            adjustedBaseAmount
+            curve.initVirtualQuoteReserves,
+            curve.initVirtualBaseReserves,
+            curve.currentBaseReserves,
+            curve.currentQuoteReserves,
+            baseAmount, // 使用原始的 baseAmount
+            quoteTokenDecimals,
+            baseTokenDecimals
         );
 
-        // 将计算出的 quoteAmount 缩放回代币的原始精度
-        uint256 adjustedQuoteAmount = quoteAmount / precisionFactor;
-        require(adjustedQuoteAmount > 0, "Invalid quote amount calculated");
+        // 计算手续费
+        uint256 feeAmount = (quoteAmount * curve.feeBps) / 10000;
+        uint256 newQuoteAmount = quoteAmount - feeAmount;
 
-        // 销毁基础代币
-        CustomToken(baseToken).burnFrom(userAddress, baseAmount);
+        require(newQuoteAmount > 0, "Invalid quote amount calculated");
 
-        // 处理 WBNB 或其他报价代币的提款逻辑
+        // 将基础代币（baseToken）转回池子
+        require(IERC20(baseToken).transferFrom(userAddress, address(this), baseAmount), "Base token transfer failed");
+
+        // 处理 WBNB 或其他 quoteToken 的转移逻辑
         if (curve.quoteToken == WBNB_ADDRESS) {
-            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", adjustedQuoteAmount));
+            // 转移 netQuoteAmount 到用户账户
+            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", newQuoteAmount));
             require(success, "WBNB withdraw failed");
-            (success, ) = payable(userAddress).call{value: adjustedQuoteAmount}("");
+            (success, ) = payable(userAddress).call{value: newQuoteAmount}("");
             require(success, "Transfer failed");
+
+            // 转移手续费到 feeRecipientAccount
+            (success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", feeAmount));
+            require(success, "WBNB withdraw failed");
+            (success, ) = payable(initializeConfig.feeRecipientAccount()).call{value: feeAmount}("");
+            require(success, "Fee transfer failed");
+
         } else {
-            require(IERC20(curve.quoteToken).transfer(userAddress, adjustedQuoteAmount), "Transfer failed");
+            // 非 WBNB 的 quoteToken 转移
+            require(IERC20(curve.quoteToken).transfer(userAddress, newQuoteAmount), "Transfer failed");
+            // 将手续费转移到 feeRecipientAccount
+            require(IERC20(curve.quoteToken).transfer(initializeConfig.feeRecipientAccount(), feeAmount), "Fee transfer failed");
         }
 
         // 更新储备
-        curve.currentQuoteReserves -= adjustedQuoteAmount;
+        curve.currentQuoteReserves -= quoteAmount;
         curve.currentBaseReserves -= baseAmount;
-
-        emit TokenSold(userAddress, baseToken, baseAmount, adjustedQuoteAmount);
     }
 
     function calculateTokensSold(
@@ -259,155 +318,194 @@ contract TokenOperations is Ownable {
         uint256 initVirtualBaseReserves,
         uint256 currentBaseSupply,
         uint256 currentQuoteBalance,
-        uint256 sellBaseAmount
+        uint256 sellBaseAmount,
+        uint8 quoteTokenDecimals,
+        uint8 baseTokenDecimals
     ) internal pure returns (uint256) {
-        require(currentBaseSupply >= sellBaseAmount, "Sell base amount exceeds current base supply");
+        // 动态调整精度因子，确保所有数值统一到 18 位小数精度
+        uint256 scalingFactorQuote = 10 ** (18 - quoteTokenDecimals);  // 调整为 18 位精度
+        uint256 scalingFactorBase = 10 ** (18 - baseTokenDecimals);    // 调整为 18 位精度
 
-        // 使用 UD60x18 进行高精度计算
-        UD60x18 k = ud(currentBaseSupply).sub(ud(sellBaseAmount)); // 当前基础代币供应 - 卖出的基础代币
-        UD60x18 m = ud(initVirtualQuoteReserves);                  // 初始虚拟报价储备
-        UD60x18 n = ud(initVirtualBaseReserves);                   // 初始虚拟基础储备
-        UD60x18 currentQuoteBalanceHighPrecision = ud(currentQuoteBalance); // 当前高精度的报价代币余额
-
-        // 计算 (k * m) 和 (n - k)
-        UD60x18 km = k.mul(m);
+        // 计算 k、m、n 以及最终的 quoteAmount
+        UD60x18 k = calculateK(currentBaseSupply, sellBaseAmount, scalingFactorBase);
+        UD60x18 m = calculateM(initVirtualQuoteReserves, scalingFactorQuote);
+        UD60x18 n = calculateN(initVirtualBaseReserves, scalingFactorBase);
+        UD60x18 km = calculateKM(k, m);
         UD60x18 nMinusK = n.sub(k);
 
         require(nMinusK.unwrap() > 0, "nMinusK is zero, cannot divide by zero");
 
-        // 计算卖出代币后获得的报价代币数量
-        UD60x18 quoteAmount = currentQuoteBalanceHighPrecision.sub(km.div(nMinusK));
-
-        return quoteAmount.unwrap(); // 返回高精度计算结果
+        return calculateFinalQuoteAmount(currentQuoteBalance, km, nMinusK, scalingFactorQuote);
     }
 
-    function getAllowance(address token, address owner, address spender) external view returns (uint256) {
-        return IERC20(token).allowance(owner, spender);
+    function calculateK(
+        uint256 currentBaseSupply,
+        uint256 sellBaseAmount,
+        uint256 scalingFactorBase
+    ) internal pure returns (UD60x18) {
+        return ud(currentBaseSupply * scalingFactorBase).sub(ud(sellBaseAmount * scalingFactorBase));
+    }
+
+    function calculateM(
+        uint256 initVirtualQuoteReserves,
+        uint256 scalingFactorQuote
+    ) internal pure returns (UD60x18) {
+        return ud(initVirtualQuoteReserves * scalingFactorQuote);
+    }
+
+    function calculateN(
+        uint256 initVirtualBaseReserves,
+        uint256 scalingFactorBase
+    ) internal pure returns (UD60x18) {
+        return ud(initVirtualBaseReserves * scalingFactorBase);
+    }
+
+    function calculateKM(
+        UD60x18 k,
+        UD60x18 m
+    ) internal pure returns (UD60x18) {
+        return k.mul(m);
+    }
+
+    function calculateFinalQuoteAmount(
+        uint256 currentQuoteBalance,
+        UD60x18 km,
+        UD60x18 nMinusK,
+        uint256 scalingFactorQuote
+    ) internal pure returns (uint256) {
+        UD60x18 quoteAmount = ud(currentQuoteBalance * scalingFactorQuote).sub(km.div(nMinusK));
+        return quoteAmount.unwrap() / scalingFactorQuote;
     }
 
     // Deposit 功能
     function deposit(
         uint256 cost,
-        address mint,
+        address token,
         address userAddress
     ) external payable onlyFactory { 
         require(cost > 0, "Invalid parameters");
 
-        // 获取代币精度并计算缩放因子
-        uint256 decimals = quoteTokenManager.getQuoteTokenDecimals(mint);
-        UD60x18 scalingFactor = ud(10 ** decimals);
-
-        if (mint == WBNB_ADDRESS) {
+        // 判断是否是原生 BNB 还是 ERC20 代币
+        if (msg.value > 0) {
+            // 用户存的是原生 BNB
+            require(token == address(0), "Token address must be zero for BNB");
             require(msg.value == cost, "Incorrect BNB amount sent");
-            (bool success, ) = payable(depositAccount).call{value: cost}("");
-            require(success, "Transfer failed");
+
+            // 直接将 BNB 转移到存款账户
+            (bool success, ) = payable(getDepositAccount()).call{value: cost}("");
+            require(success, "BNB transfer failed");
+
+            // emit DepositEvent(userAddress, address(0), cost, "OrderID", "Deposit", "ExtraInfo", 1, 1, block.timestamp);
+
         } else {
-            // 应用精度缩放
-            uint256 adjustedCost = ud(cost).mul(scalingFactor).unwrap();
-            require(IERC20(mint).transferFrom(userAddress, depositAccount, adjustedCost), "Transfer failed");
+            // 用户存的是 ERC20 代币，确保 token 地址有效
+            require(token != address(0), "Invalid token address");
+
+            // 执行 ERC20 代币的 transferFrom 操作，将资金从用户转移到存款账户
+            require(IERC20(token).transferFrom(userAddress, getDepositAccount(), cost), "ERC20 transfer failed");
+
+            // emit DepositEvent(userAddress, token, cost, "OrderID", "Deposit", "ExtraInfo", 1, 1, block.timestamp);
         }
     }
 
-    function deposit2(DepositParams calldata params) external payable onlyFactory { 
-        require(params.cost1 > 0 && params.cost2 > 0, "Invalid parameters");
-        require(params.mint1 != address(0) && params.mint2 != address(0), "Invalid mint addresses");
+    // Deposit 功能
+    function deposit2(
+        uint256 cost1,        // 第一个代币的存款金额
+        uint256 cost2,        // 第二个代币的存款金额
+        address mint1,        // 第一个代币的地址
+        address mint2,        // 第二个代币的地址
+        address userAddress   // 用户的地址
+    ) external payable onlyFactory { 
+        require(cost1 > 0 && cost2 > 0, "Invalid parameters");
+        require(mint1 != address(0) && mint2 != address(0), "Invalid mint addresses");
 
-        // 获取代币精度并计算缩放因子
-        uint256 decimals1 = quoteTokenManager.getQuoteTokenDecimals(params.mint1);
-        uint256 decimals2 = quoteTokenManager.getQuoteTokenDecimals(params.mint2);
-        UD60x18 scalingFactor1 = ud(10 ** decimals1);
-        UD60x18 scalingFactor2 = ud(10 ** decimals2);
-
-        if (params.mint1 == WBNB_ADDRESS) {
-            require(msg.value == params.cost1, "Incorrect BNB amount sent");
-            (bool success, ) = payable(depositAccount).call{value: params.cost1}("");
+        // 处理第一个代币的存款
+        if (mint1 == WBNB_ADDRESS) {
+            require(msg.value == cost1, "Incorrect BNB amount sent");
+            (bool success, ) = payable(getDepositAccount()).call{value: cost1}("");
             require(success, "Transfer failed");
         } else {
-            // 应用精度缩放
-            uint256 adjustedCost1 = ud(params.cost1).mul(scalingFactor1).unwrap();
-            require(IERC20(params.mint1).transferFrom(params.userAddress, depositAccount, adjustedCost1), "Transfer failed");
+            // 执行 ERC20 代币的 transferFrom 操作
+            require(IERC20(mint1).transferFrom(userAddress, getDepositAccount(), cost1), "Transfer failed");
         }
 
-        if (params.mint2 == WBNB_ADDRESS) {
-            require(msg.value == params.cost2, "Incorrect BNB amount sent");
-            (bool success, ) = payable(depositAccount).call{value: params.cost2}("");
+        // 处理第二个代币的存款
+        if (mint2 == WBNB_ADDRESS) {
+            require(msg.value == cost2, "Incorrect BNB amount sent");
+            (bool success, ) = payable(getDepositAccount()).call{value: cost2}("");
             require(success, "Transfer failed");
         } else {
-            // 应用精度缩放
-            uint256 adjustedCost2 = ud(params.cost2).mul(scalingFactor2).unwrap();
-            require(IERC20(params.mint2).transferFrom(params.userAddress, depositAccount, adjustedCost2), "Transfer failed");
+            // 执行 ERC20 代币的 transferFrom 操作
+            require(IERC20(mint2).transferFrom(userAddress, getDepositAccount(), cost2), "Transfer failed");
         }
 
-        emit DepositEvent2Part1(params.userAddress, params.mint1, params.cost1, params.mint2);
-        emit DepositEvent2Part2(params.cost2, params.command, params.extraInfo, params.maxIndex, params.index, block.timestamp);
+        // 事件触发，记录存款事件
+        // emit DepositEvent2(userAddress, mint1, cost1, mint2, cost2, block.timestamp);
     }
 
     // Withdraw 功能
     function withdraw(
         address baseToken,
-        address quoteToken,
-        uint256 quoteAmount,
-        uint256 baseAmount,
         address payable receiver
     ) external onlyFactory {
-        require(baseToken != address(0) && quoteToken != address(0), "Invalid token addresses");
+        require(baseToken != address(0), "Invalid base token address");
         require(receiver != address(0), "Invalid receiver address");
 
-        // 获取代币精度并计算缩放因子
-        uint256 decimals = quoteTokenManager.getQuoteTokenDecimals(quoteToken);
-        UD60x18 scalingFactor = ud(10 ** decimals);
+        CurveInfo storage curve = curves[baseToken];
+        require(curve.isOnPancake, "Liquidity is not on PancakeSwap");
 
-        // 应用精度缩放
-        uint256 adjustedQuoteAmount = ud(quoteAmount).mul(scalingFactor).unwrap();
-        uint256 adjustedBaseAmount = ud(baseAmount).mul(scalingFactor).unwrap();
+        // 获取池子里的所有 QuoteToken 和 BaseToken
+        uint256 quoteBalance = IERC20(curve.quoteToken).balanceOf(address(this));
+        uint256 baseBalance = IERC20(baseToken).balanceOf(address(this));
 
-        if (quoteToken == WBNB_ADDRESS) {
-            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", adjustedQuoteAmount));
+        // 处理 QuoteToken 的提取
+        if (curve.quoteToken == WBNB_ADDRESS) {
+            // 如果是 WBNB，先执行 WBNB 的提现
+            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", quoteBalance));
             require(success, "WBNB withdraw failed");
-            (success, ) = receiver.call{value: adjustedQuoteAmount}("");
+            // 将提取后的 BNB 转给接收者
+            (success, ) = receiver.call{value: quoteBalance}("");
             require(success, "Transfer failed");
         } else {
-            require(IERC20(quoteToken).transfer(receiver, adjustedQuoteAmount), "Transfer failed");
+            // 直接转移 quoteToken 给接收者
+            require(IERC20(curve.quoteToken).transfer(receiver, quoteBalance), "Quote token transfer failed");
         }
 
-        require(IERC20(baseToken).transfer(receiver, adjustedBaseAmount), "Transfer failed");
+        // 处理 BaseToken 的提取
+        require(IERC20(baseToken).transfer(receiver, baseBalance), "Base token transfer failed");
 
-        emit WithdrawEvent(quoteToken, baseToken, adjustedQuoteAmount, adjustedBaseAmount, block.timestamp, receiver);
+        // 清空池子的储备
+        curve.currentQuoteReserves = 0;
+        curve.currentBaseReserves = 0;
+
+        // 将池子的 baseToken 和 quoteToken 地址设置为 address(0)，标记为关闭
+        curve.baseToken = address(0);
+        curve.quoteToken = address(0);
+
+        // emit WithdrawEvent(curve.quoteToken, baseToken, quoteBalance, baseBalance, block.timestamp, receiver);
     }
 
     function withdraw2(
         uint256 cost,
-        address mint,
+        address token,  
         address payable receiver
     ) external onlyFactory { 
-        require(mint != address(0), "Invalid token address");
+        require(token != address(0), "Invalid token address");
         require(receiver != address(0), "Invalid receiver address");
 
-        // 获取代币精度并计算缩放因子
-        uint256 decimals = quoteTokenManager.getQuoteTokenDecimals(mint);
-        UD60x18 scalingFactor = ud(10 ** decimals);
-
-        // 应用精度缩放
-        uint256 adjustedCost = ud(cost).mul(scalingFactor).unwrap();
-
-        if (mint == WBNB_ADDRESS) {
-            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", adjustedCost));
+        if (token == WBNB_ADDRESS) {
+            // 如果是 WBNB，提取 WBNB 转为 BNB，并转给接收者
+            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", cost));
             require(success, "WBNB withdraw failed");
-            (success, ) = receiver.call{value: adjustedCost}("");
+            (success, ) = receiver.call{value: cost}("");
             require(success, "Transfer failed");
         } else {
-            require(IERC20(mint).transfer(receiver, adjustedCost), "Transfer failed");
+            // 如果是 ERC20 代币，则直接转账
+            require(IERC20(token).transfer(receiver, cost), "Transfer failed");
         }
 
-        emit Withdraw2Event(msg.sender, receiver, mint, adjustedCost, block.timestamp);
+        // 记录转账事件
+        // emit Withdraw2Event(msg.sender, receiver, token, cost, block.timestamp);
     }
 
-    function getVirtualReserves(address quoteMint) internal view returns (uint256, uint256) {
-        QuoteTokenManager.QuoteTokenInfo memory quoteInfo = quoteTokenManager.getQuoteTokenInfo(quoteMint);
-        require(quoteInfo.quoteMint != address(0), "Invalid quoteMint provided");
-
-        uint256 initVirtualQuoteReserves = uint256(uint160(quoteInfo.feeRecipientAccount));
-        uint256 initVirtualBaseReserves = uint256(uint160(quoteInfo.feeRecipientQuote));
-        return (initVirtualQuoteReserves, initVirtualBaseReserves);
-    }
 }

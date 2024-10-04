@@ -14,30 +14,22 @@ contract TokenFactory is Ownable {
 
     address public implementation;
     address public initialOwner;
+    address WBNB;
+    address pancake;
     InitializeConfig public initializeConfig;
     QuoteTokenManager public quoteTokenManager;
     TokenOperations public tokenOperations;
     uint8 public decimals; 
 
-    uint256 public baseMinSupply;
-    uint256 public baseMaxSupply;
-    uint256 public baseMinFeeRate;
-    uint256 public baseMaxFeeRate;
-    uint256 public createFee;
-    address public adminAddress;
-    address public platformAddress;
-    address public feeRecipientAccount;
-    address public depositAccount;
+    struct Addresses {
+        address customToken;
+        address tokenOperations;
+    }
 
-    mapping(uint256 => address) public tokenAddresses;
+    mapping(uint256 => Addresses) public tokenAddresses;
+    // 定义 baseToken 到 tokenOperations 地址的映射
+    mapping(address => address) public baseTokenToOperations;
     uint256 public tokenIndex;
-
-    event TokenCreated(address indexed tokenAddress, string name, string symbol, uint256 initialSupply, address owner);
-    event Debug(string message, address addr);
-    event DebugInitializeParams(string name, string symbol, address user, string uri);
-    event DebugCloneResult(address cloneAddress);
-    event DebugCloneError(string reason);
-    event DebugValue(string message, uint256 value);
 
     struct TokenParams {
         string name;
@@ -57,7 +49,8 @@ contract TokenFactory is Ownable {
         address _initialOwner,
         address _initializeConfigAddress,
         address _quoteTokenManagerAddress,
-        address _tokenOperationsAddress
+        address _tokenOperationsAddress,
+        bool isTestnet
     ) Ownable(_initialOwner) {
         implementation = _implementation;
         initialOwner = _initialOwner;
@@ -65,70 +58,26 @@ contract TokenFactory is Ownable {
         quoteTokenManager = QuoteTokenManager(_quoteTokenManagerAddress);
         tokenOperations = TokenOperations(_tokenOperationsAddress);
         decimals = 6; 
-        updateConfig();
 
-        // 为 TokenOperations 设置 factory 地址
-        tokenOperations.setFactory(address(this));
-
-        emit Debug("TokenFactory Constructor Called", address(this));
+        setTokenAddresses(isTestnet);
+        initializeConfig.setFactory(address(this));
     }
 
-    function updateConfig() public {
-        (
-            ,
-            ,
-            address _admin,
-            address _platform,
-            address _feeRecipientAccount,
-            address _depositAccount,
-            uint256 _baseMinSupply,
-            uint256 _baseMaxSupply,
-            uint256 _createFee,
-            uint256 _baseMinFeeRate,
-            uint256 _baseMaxFeeRate
-        ) = initializeConfig.getProgramConfig();
-
-        baseMinSupply = _baseMinSupply;
-        baseMaxSupply = _baseMaxSupply;
-        createFee = _createFee;
-        feeRecipientAccount = _feeRecipientAccount;
-        baseMinFeeRate = _baseMinFeeRate;
-        baseMaxFeeRate = _baseMaxFeeRate;
-        adminAddress = _admin;
-        platformAddress = _platform;
-        depositAccount = _depositAccount;
-
-        emit DebugValue("Updated baseMinFeeRate", baseMinFeeRate);
-        emit DebugValue("Updated baseMaxFeeRate", baseMaxFeeRate);
-        emit DebugValue("Updated baseMinSupply", baseMinSupply);
-        emit DebugValue("Updated baseMaxSupply", baseMaxSupply);
-        emit DebugValue("Updated createFee", createFee);
-        emit Debug("Updated feeRecipientAccount", feeRecipientAccount);
+    function setTokenAddresses(bool isTestnet) internal {
+        if (isTestnet) {
+            // 测试网地址
+            WBNB = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;  // WBNB 测试网地址
+            pancake = 0x9Ac64Cc6e4415144c455Bd8E483E3Bb5CE9E4F84;  // PancakeSwap 测试网地址
+        } else {
+            // 主网地址
+            WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;  // WBNB 主网地址
+            pancake = 0x10ED43C718714eb63d5aA57B78B54704E256024E;  // PancakeSwap 主网地址
+        }
     }
 
-    function setDecimals(uint8 newDecimals) external onlyOwner {
-        decimals = newDecimals;
-        emit DebugValue("Decimals set to", newDecimals);
-    }
-
-    function getNetworkAddresses() internal view returns (
-        address wbnb,
-        address usdt,
-        address usdc,
-        address busd,
-        address dai
-    ) {
-        return (
-            tokenOperations.WBNB_ADDRESS(),
-            tokenOperations.USDT_ADDRESS(),
-            tokenOperations.USDC_ADDRESS(),
-            tokenOperations.BUSD_ADDRESS(),
-            tokenOperations.DAI_ADDRESS()
-        );
-    }
-
-    function createToken(TokenParams memory params) external payable returns (address) {
-        updateConfig();
+    function createToken(TokenParams memory params) external payable {
+        // 从 initializeConfig 中读取创建费用
+        uint256 createFee = initializeConfig.createFee();
         
         // 确保创建费正确
         require(msg.value == createFee, "Insufficient creation fee");
@@ -137,36 +86,43 @@ contract TokenFactory is Ownable {
         require(bytes(params.name).length > 0, "Token name is required");
         require(bytes(params.symbol).length > 0, "Token symbol is required");
         require(bytes(params.uri).length > 0, "Token URI is required");
-        require(params.initialSupply >= baseMinSupply && params.initialSupply <= baseMaxSupply, "Initial supply out of range");
-        require(params.feeBps >= baseMinFeeRate && params.feeBps <= baseMaxFeeRate, "Fee Bps out of range");
+        require(params.initialSupply >= initializeConfig.baseMinSupply() && params.initialSupply <= initializeConfig.baseMaxSupply(), "Initial supply out of range");
+        require(params.feeBps >= initializeConfig.baseMinFeeRate() && params.feeBps <= initializeConfig.baseMaxFeeRate(), "Fee Bps out of range");
 
         // 转移创建费
-        (bool feeTransferSuccess, ) = payable(feeRecipientAccount).call{value: createFee}("");
+        (bool feeTransferSuccess, ) = payable(initializeConfig.feeRecipientAccount()).call{value: createFee}("");
         require(feeTransferSuccess, "Fee transfer failed");
 
-        // 使用 Clone 进行合约创建
-        address cloneInstance = Clones.clone(implementation);
-        require(cloneInstance != address(0), "Clone creation failed");
+        // 使用 Clone 进行 customToken 和 TokenOperations 的合约创建
+        address cloneTokenInstance = Clones.clone(implementation);
+        require(cloneTokenInstance != address(0), "Clone creation failed");
+
+        address cloneOperationsInstance = Clones.clone(address(tokenOperations));
+        require(cloneOperationsInstance != address(0), "Clone operations creation failed");
 
         // 初始化代币
-        initializeToken(cloneInstance, params, params.initialSupply);
-
-        // 设置小数位
-        CustomToken(cloneInstance).setDecimals(decimals);
-
-        // 设置 factory 地址
-        CustomToken(cloneInstance).setFactory(address(this));
+        initializeToken(cloneTokenInstance, cloneOperationsInstance, params);
 
         // 设置 operations 地址
-        CustomToken(cloneInstance).setOperations(address(tokenOperations));
+        CustomToken(cloneTokenInstance).setOperations(cloneOperationsInstance);
+        // 设置 tokenFactory 地址
+        TokenOperations(cloneOperationsInstance).setFactory(address(this));
+
+        // 调用初始化方法传递所需的地址
+        TokenOperations(cloneOperationsInstance).initialize(
+            address(quoteTokenManager),        // 传入 quoteTokenManager 的地址
+            address(initializeConfig),         // 传入 initializeConfig 的地址
+            pancake,                           // pancakeAddress
+            WBNB                               // WBNB_ADDRESS
+        );
 
         // 确保 quoteToken 已注册
         QuoteTokenManager.QuoteTokenInfo memory quoteInfo = quoteTokenManager.getQuoteTokenInfo(params.quoteToken);
         require(quoteInfo.quoteMint != address(0), "Quote token not registered");
 
-        // 初始化曲线
-        tokenOperations.initializeCurve(
-            cloneInstance,
+        // 初始化曲线，传递 bondingCurveBase
+        TokenOperations(cloneOperationsInstance).initializeCurve(
+            cloneTokenInstance,
             quoteInfo.quoteMint,
             params.initVirtualQuoteReserves,
             params.initVirtualBaseReserves,
@@ -176,40 +132,38 @@ contract TokenFactory is Ownable {
             params.isLaunchPermitted
         );
 
-        // 记录新创建的代币
-        tokenAddresses[tokenIndex] = cloneInstance;
+        // 记录新创建的代币和对应的 TokenOperations 实例
+        tokenAddresses[tokenIndex] = Addresses({
+            customToken: cloneTokenInstance,
+            tokenOperations: cloneOperationsInstance
+        });
         tokenIndex++;
+        // 记录 新创建的 baseToken 和 tokenOperations
+        baseTokenToOperations[cloneTokenInstance] = cloneOperationsInstance;
 
-        // 触发事件
-        emit TokenCreated(cloneInstance, params.name, params.symbol, params.initialSupply, initialOwner);
-
-        return cloneInstance;
     }
 
-    function initializeToken(address cloneInstance, TokenParams memory params, uint256 initialSupply) internal {
-        emit DebugInitializeParams(params.name, params.symbol, initialOwner, params.uri);
+    function initializeToken(address cloneCustomToken, address cloneTokenOperations, TokenParams memory params) internal {
 
-        (bool success, bytes memory data) = cloneInstance.call(
+        (bool success, bytes memory data) = cloneCustomToken.call(
             abi.encodeWithSignature(
-                "initialize(string,string,address,string,uint256,uint256,uint256,uint256,uint256,uint256,bool)",
+                "initialize(string,string,address,string,uint256,uint256,uint256,uint256,uint256,uint8,bool)",
                 params.name,
                 params.symbol,
-                initialOwner,
+                cloneTokenOperations,
                 params.uri,
-                initialSupply,
+                params.initialSupply,
                 params.target,
                 params.initVirtualQuoteReserves,
                 params.initVirtualBaseReserves,
                 params.feeBps,
-                createFee,
+                decimals,
                 params.isLaunchPermitted
             )
         );
 
         if (!success) {
-            emit Debug("Initialization failed", cloneInstance);
             if (data.length > 0) {
-                emit DebugCloneError(string(data));
                 revert(string(data));
             } else {
                 revert("Unknown error during initialization");
@@ -217,88 +171,102 @@ contract TokenFactory is Ownable {
         }
     }
 
-    // function initializeBondingCurve(address baseToken) external onlyOwner {
-    //     CurveInfo memory curve = tokenOperations.getCurveInfo(baseToken);
-
-    //     require(curve.baseToken != address(0), "Curve does not exist for the provided baseToken");
-    //     require(CustomToken(baseToken).owner() == owner(), "TokenFactory and CustomToken owner mismatch");
-
-    //     CustomToken(baseToken).mint(address(this), curve.initVirtualBaseReserves);
-    //     emit Debug("Bonding curve accounts created", address(this));
-    // }
-
     function buyToken(
         address baseToken, 
         uint256 quoteAmount, 
         uint256 minBaseAmount
     ) external payable {
-        tokenOperations.buyToken{value: msg.value}(baseToken, quoteAmount, minBaseAmount, msg.sender);
+        TokenOperations(baseTokenToOperations[baseToken]).buyToken{value: msg.value}(baseToken, quoteAmount, minBaseAmount, msg.sender);
     }
 
     function sellToken(address baseToken, uint256 baseAmount) external onlyOwner {
-        tokenOperations.sellToken(baseToken, baseAmount, msg.sender);
+        TokenOperations(baseTokenToOperations[baseToken]).sellToken(baseToken, baseAmount, msg.sender);
     }
 
-    function getAllTokenAddresses() public view returns (address[] memory) {
-        address[] memory addresses = new address[](tokenIndex);
+    // 返回所有 customToken 的地址数组
+    function getAllCustomTokenAddresses() public view returns (address[] memory) {
+        address[] memory customTokenAddresses = new address[](tokenIndex); // 创建 customToken 地址数组
         for (uint256 i = 0; i < tokenIndex; i++) {
-            addresses[i] = tokenAddresses[i];
+            customTokenAddresses[i] = tokenAddresses[i].customToken; // 从结构体中提取 customToken 地址
         }
-        return addresses;
+        return customTokenAddresses;
     }
 
-    function setTokenDecimals(address tokenAddress, uint8 newDecimals) internal onlyOwner {
-        require(tokenAddress != address(0), "Invalid token address");
-
-        (bool success, ) = tokenAddress.call(
-            abi.encodeWithSignature("setDecimals(uint8)", newDecimals)
-        );
-        require(success, "Failed to set token decimals");
-
-        emit DebugValue("Decimals set for token", newDecimals);
+    // 返回所有 tokenOperations 的地址数组
+    function getAllTokenOperationsAddresses() public view returns (address[] memory) {
+        address[] memory tokenOperationsAddresses = new address[](tokenIndex); // 创建 tokenOperations 地址数组
+        for (uint256 i = 0; i < tokenIndex; i++) {
+            tokenOperationsAddresses[i] = tokenAddresses[i].tokenOperations; // 从结构体中提取 tokenOperations 地址
+        }
+        return tokenOperationsAddresses;
     }
-    
+
     // Deposit 功能
     function deposit(
         uint256 cost,
-        address mint
+        address mint,
+        address baseToken
     ) external payable  {
-        tokenOperations.deposit{value: msg.value}(cost, mint, msg.sender);
+        TokenOperations(baseTokenToOperations[baseToken]).deposit{value: msg.value}(cost, mint, msg.sender);
     }
 
     function deposit2(
-        TokenOperations.DepositParams calldata params
+        uint256 cost1,        // 第一个代币的存款金额
+        uint256 cost2,        // 第二个代币的存款金额
+        address mint1,        // 第一个代币的地址
+        address mint2,        // 第二个代币的地址
+        address baseToken     // TokenOperations 实例
     ) external payable  {
-        tokenOperations.deposit2{value: msg.value}(params);
+        TokenOperations(baseTokenToOperations[baseToken]).deposit2{value: msg.value}(cost1, cost2, mint1, mint2, msg.sender);
     }
 
     // Withdraw 功能
     function withdraw(
-        address baseToken,
-        address quoteToken,
-        uint256 quoteAmount,
-        uint256 baseAmount,
-        address payable receiver
+        address baseToken
     ) external  {
-        tokenOperations.withdraw(baseToken, quoteToken, quoteAmount, baseAmount, receiver);
+        // 检查调用者是否为平台账户
+        require(msg.sender == initializeConfig.platform(), "Caller is not the platform");
+
+        // 调用具体池子实例的 withdraw 方法
+        TokenOperations(baseTokenToOperations[baseToken]).withdraw(baseToken, payable(msg.sender));
     }
 
     function withdraw2(
         uint256 cost,
         address mint,
-        address payable receiver
+        address payable receiver,
+        address baseToken
     ) external  {
-        tokenOperations.withdraw2(cost, mint, receiver);
-    }
-
-    // 用户传入完整的代币数量
-    function approveToken(address owner, address token, uint256 amount, address spender) external {
-        require(CustomToken(token).approveToken(owner, spender, amount), "Approve failed");
-        emit DebugValue("Approved amount", amount);
+        TokenOperations(baseTokenToOperations[baseToken]).withdraw2(cost, mint, receiver);
     }
 
     function permit(address baseToken) external {
         // 调用 TokenOperations 合约中的 permit 函数
-        tokenOperations.permit(baseToken);
+        TokenOperations(baseTokenToOperations[baseToken]).permit(baseToken,msg.sender);
+    }
+
+    // 允许 TokenFactory 的拥有者通过这些接口修改 InitializeConfig 中的参数
+    function updatePlatformAddress(address newPlatform) external onlyOwner {
+        initializeConfig.updatePlatform(newPlatform);
+    }
+
+    function updateFeeRecipientAddress(address newFeeRecipient) external onlyOwner {
+        initializeConfig.updateFeeRecipient(newFeeRecipient);
+    }
+
+    function updateDepositAccountAddress(address newDepositAccount) external onlyOwner {
+        initializeConfig.updateDepositAccount(newDepositAccount);
+    }
+
+    function updateSupplyLimits(uint256 newBaseMinSupply, uint256 newBaseMaxSupply) external onlyOwner {
+        initializeConfig.updateSupplyLimits(newBaseMinSupply, newBaseMaxSupply);
+    }
+
+    function updateFeeRates(uint256 newBaseMinFeeRate, uint256 newBaseMaxFeeRate) external onlyOwner {
+        initializeConfig.updateFeeRates(newBaseMinFeeRate, newBaseMaxFeeRate);
+    }
+
+    function updateCreateFee(uint256 newCreateFee) external onlyOwner {
+        initializeConfig.updateCreateFee(newCreateFee);
     }
 }

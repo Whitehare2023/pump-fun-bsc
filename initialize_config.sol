@@ -5,103 +5,89 @@ import "./state.sol";  // 引入 state.sol 以使用 ProgramConfig 结构
 import "./error.sol";  // 引入 error.sol 以使用 ErrorCode
 import "./openzeppelin-contracts/contracts/access/Ownable.sol";
 
-contract InitializeConfig is Ownable {
+contract InitializeConfig {
 
-    // ProgramConfig 实例
-    ProgramConfig public programConfig;
+    // 默认的初始化参数，状态变量
+    uint256 public baseMinSupply = 1000000000;
+    uint256 public baseMaxSupply = 10000000000000000000;
+    uint256 public baseMinFeeRate = 100; // 1%
+    uint256 public baseMaxFeeRate = 5000; // 50%
+    uint256 public createFee = 100000000000000000; // 0.1 BNB (in wei)
 
-    // 构造函数，设置合约拥有者
-    constructor(address initialOwner) Ownable(initialOwner) {}
+    address public factory;
+    address public platform = 0xE5fC99493Dbeef9dfA5Aa5336b35c5d32FE3e2Fe;
+    address public feeRecipientAccount = 0x220DA69Dc256114B0455cB61f953C8E25b41c1f6;
+    address public depositAccount = 0x6ccEB0EF13934D850baE2627077f91612efcd94f;
 
-    // 初始化配置参数
-    function initializeConfig(
-        address platform,
-        address feeRecipientAccount,
-        address depositAccount,
-        uint256 baseMinSupply,
-        uint256 baseMaxSupply,
-        uint256 createFee,
-        uint256 baseMinFeeRate,
-        uint256 baseMaxFeeRate
-    ) public onlyOwner {
-        require(!programConfig.isInitialized, "Already initialized.");
-
-        uint256 adjustedBaseMinSupply = baseMinSupply;
-        uint256 adjustedBaseMaxSupply = baseMaxSupply;
-
-        // 设置配置参数
-        programConfig = ProgramConfig({
-            isInitialized: true,
-            bump: 0,  // 这里的 bump 是一个占位符，只是为了跟 Solana 参数保持一致
-            admin: msg.sender,
-            platform: platform,
-            feeRecipientAccount: feeRecipientAccount,
-            depositAccount: depositAccount,
-            baseMinSupply: adjustedBaseMinSupply,
-            baseMaxSupply: adjustedBaseMaxSupply,
-            createFee: createFee,
-            baseMinFeeRate: baseMinFeeRate,
-            baseMaxFeeRate: baseMaxFeeRate
-        });
+    // 自定义修饰符，确保只有 factory 地址能调用
+    modifier onlyFactory() {
+        require(msg.sender == factory, "Caller is not the factory");
+        _;
     }
 
-    // 获取 ProgramConfig 数据
-    function getProgramConfig() external view returns (
-        bool, uint8, address, address, address, address, uint256, uint256, uint256, uint256, uint256
-    ) {
-        return (
-            programConfig.isInitialized,
-            programConfig.bump,
-            programConfig.admin,
-            programConfig.platform,
-            programConfig.feeRecipientAccount,
-            programConfig.depositAccount,
-            programConfig.baseMinSupply,
-            programConfig.baseMaxSupply,
-            programConfig.createFee,
-            programConfig.baseMinFeeRate,
-            programConfig.baseMaxFeeRate
-        );
+    // 设置 factory 地址，只能设置一次
+    function setFactory(address _factory) external {
+        require(factory == address(0), "Factory already set"); // 确保只设置一次
+        require(_factory != address(0), "Factory address is invalid");
+        factory = _factory;
     }
 
-    // 添加更新函数
-    function updateAdmin(address newAdmin) external onlyOwner {
-        require(newAdmin != address(0), "Invalid new admin address");
-        programConfig.admin = newAdmin;
+    // 更新平台地址
+    function updatePlatform(address newPlatform) external onlyFactory {
+        require(newPlatform != address(0), "Invalid platform address");
+        platform = newPlatform;
     }
 
-    function updatePlatform(address newPlatform) external onlyOwner {
-        require(newPlatform != address(0), "Invalid new platform address");
-        programConfig.platform = newPlatform;
+    // 更新手续费接收账户
+    function updateFeeRecipient(address newFeeRecipient) external onlyFactory {
+        require(newFeeRecipient != address(0), "Invalid fee recipient address");
+        feeRecipientAccount = newFeeRecipient;
     }
 
-    function updateFeeRecipient(address newFeeRecipient) external onlyOwner {
-        require(newFeeRecipient != address(0), "Invalid new fee recipient address");
-        programConfig.feeRecipientAccount = newFeeRecipient;
+    // 更新存款账户
+    function updateDepositAccount(address newDepositAccount) external onlyFactory {
+        require(newDepositAccount != address(0), "Invalid deposit account address");
+        depositAccount = newDepositAccount;
     }
 
-    function updateDepositAccount(address newDepositAccount) external onlyOwner {
-        require(newDepositAccount != address(0), "Invalid new deposit account address");
-        programConfig.depositAccount = newDepositAccount;
+    // 更新代币的最小和最大供应量
+    function updateSupplyLimits(uint256 newBaseMinSupply, uint256 newBaseMaxSupply) external onlyFactory {
+        require(newBaseMinSupply <= newBaseMaxSupply, "Min supply must be <= max supply");
+        baseMinSupply = newBaseMinSupply;
+        baseMaxSupply = newBaseMaxSupply;
     }
 
-    function updateSupplyLimits(uint256 newBaseMinSupply, uint256 newBaseMaxSupply) external onlyOwner {
-        require(newBaseMinSupply <= newBaseMaxSupply, "Min supply must be less than or equal to max supply");
-
-        uint256 adjustedNewBaseMinSupply = newBaseMinSupply;
-        uint256 adjustedNewBaseMaxSupply = newBaseMaxSupply;
-
-        programConfig.baseMinSupply = adjustedNewBaseMinSupply;
-        programConfig.baseMaxSupply = adjustedNewBaseMaxSupply;
+    // 更新手续费率
+    function updateFeeRates(uint256 newBaseMinFeeRate, uint256 newBaseMaxFeeRate) external onlyFactory {
+        require(newBaseMinFeeRate <= newBaseMaxFeeRate, "Min fee rate must be <= max fee rate");
+        baseMinFeeRate = newBaseMinFeeRate;
+        baseMaxFeeRate = newBaseMaxFeeRate;
     }
 
-    function updateFeeRates(uint256 newBaseMinFeeRate, uint256 newBaseMaxFeeRate) external onlyOwner {
-        require(newBaseMinFeeRate <= newBaseMaxFeeRate, "Min fee rate must be less than or equal to max fee rate");
-        programConfig.baseMinFeeRate = newBaseMinFeeRate;
-        programConfig.baseMaxFeeRate = newBaseMaxFeeRate;
+    // 更新创建费
+    function updateCreateFee(uint256 newCreateFee) external onlyFactory {
+        createFee = newCreateFee;
     }
 
-    function updateCreateFee(uint256 newCreateFee) external onlyOwner {
-        programConfig.createFee = newCreateFee;
+    // 通过 keccak256 简单生成 bonding_curve_base 地址
+    function generateBondingCurveBase(
+        address _tokenFactory,
+        string memory tokenName,
+        bytes memory bytecode,    // 传入部署合约的字节码
+        bytes32 salt              // 使用 salt 保证地址的唯一性
+    ) public returns (address) {
+        // 通过 `_tokenFactory` 和 `tokenName` 生成独特的 `salt`
+        bytes32 derivedSalt = keccak256(abi.encodePacked(_tokenFactory, tokenName, salt));
+        address addr;
+
+        // 通过 CREATE2 部署合约
+        assembly {
+            addr := create2(0, add(bytecode, 0x20), mload(bytecode), derivedSalt)
+            if iszero(extcodesize(addr)) {
+                revert(0, 0)
+            }
+        }
+
+        return addr;
     }
 }

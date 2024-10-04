@@ -24,7 +24,7 @@ struct CurveInfo {
     uint256 currentBaseReserves;
     uint256 feeBps;
     uint256 target;
-    address creator; // 添加creator字段，修复权限问题
+    address creator; // 添加 creator 字段，修复权限问题
     bool isLaunchPermitted;
     bool isOnPancake;
 }

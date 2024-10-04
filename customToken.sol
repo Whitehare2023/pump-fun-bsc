@@ -2,10 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "./openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
-import "./openzeppelin-contracts/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "./openzeppelin-contracts/contracts/access/Ownable.sol";
 
-contract CustomToken is ERC20, ERC20Burnable, Ownable {
+contract CustomToken is ERC20, Ownable {
     string private _uri; // URI 存储
     bool private initialized = false; // 初始化标记
     uint8 private _decimals = 6; // 自定义小数位数
@@ -60,7 +59,6 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         return _uri;
     }
 
-    // 初始化方法，用于设置代币的基本信息
     function initialize(
         string memory tokenName,
         string memory tokenSymbol,
@@ -71,7 +69,7 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         uint256 initVirtualQuoteReserves,
         uint256 initVirtualBaseReserves,
         uint256 feeBps,
-        uint256 createFee,
+        uint8 tokenDecimals,  // 重命名为 tokenDecimals
         bool isLaunchPermitted
     ) external {
         require(!initialized, "Already initialized"); // 确保只初始化一次
@@ -87,6 +85,9 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         // 设置为已初始化
         initialized = true; // 设置初始化状态
 
+        // 设置代币精度
+        _decimals = tokenDecimals; // 使用 tokenDecimals 来设置代币的精度
+
         // 不进行任何精度处理，用户输入的值直接用作代币单位
         _mint(owner, initialSupply); // 按照原始输入铸造代币
 
@@ -95,7 +96,6 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
         _initVirtualQuoteReserves = initVirtualQuoteReserves;
         _initVirtualBaseReserves = initVirtualBaseReserves;
         _feeBps = feeBps;
-        _createFee = createFee;
         _isLaunchPermitted = isLaunchPermitted;
     }
 
@@ -131,7 +131,7 @@ contract CustomToken is ERC20, ERC20Burnable, Ownable {
     }
 
     // 设置代币精度
-    function setDecimals(uint8 newDecimals) external {
+    function setDecimals(uint8 newDecimals) external  {
         _decimals = newDecimals;
     }
 
