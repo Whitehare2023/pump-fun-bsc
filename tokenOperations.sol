@@ -121,7 +121,6 @@ contract TokenOperations {
     ) external payable onlyFactory {
         CurveInfo storage curve = curves[baseToken];
         require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
-        require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
 
         // 获取 quoteToken 和 baseToken 的精度
         uint8 quoteTokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
@@ -145,7 +144,13 @@ contract TokenOperations {
         // 将手续费转移到指定的 feeRecipientAccount
         require(IERC20(curve.quoteToken).transfer(initializeConfig.feeRecipientAccount(), feeAmount), "Fee transfer failed");
 
-        // 计算购买的 baseToken 数量，使用新的逻辑
+        // 检查是否已达到发射目标，如果接近目标，调整购买量
+        if (curve.isLaunchPermitted && curve.currentQuoteReserves + newQuoteAmount >= curve.target) {
+            // 调整购买量，使得 quoteReserves 恰好等于 target
+            newQuoteAmount = curve.target - curve.currentQuoteReserves;
+        }
+
+        // 计算购买的 baseToken 数量，使用扣除手续费后的 newQuoteAmount 进行计算
         uint256 baseAmount = calculateTokensBought(
             curve.initVirtualQuoteReserves,
             curve.initVirtualBaseReserves,
@@ -159,16 +164,11 @@ contract TokenOperations {
         require(baseAmount >= minBaseAmount, "Slippage too high, minBaseAmount not met");
 
         // 从 bondingCurveBase 转移 baseToken 给用户
-        require(IERC20(baseToken).transferFrom(address(this), userAddress, baseAmount), "Base token transfer failed");
+        require(IERC20(baseToken).transfer(userAddress, baseAmount), "Base token transfer failed");
 
         // 更新储备
         curve.currentQuoteReserves += newQuoteAmount;
         curve.currentBaseReserves += baseAmount;
-
-        // 检查是否达到 PancakeSwap 的上线条件
-        if (curve.isLaunchPermitted && curve.currentQuoteReserves >= curve.target && !curve.isOnPancake) {
-            curve.isOnPancake = true;
-        }
 
         // 触发事件
         // emit TokenPurchased(userAddress, baseToken, newQuoteAmount, baseAmount, curve.currentQuoteReserves, curve.currentBaseReserves, block.timestamp);
