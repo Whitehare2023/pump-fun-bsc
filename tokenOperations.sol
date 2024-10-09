@@ -16,20 +16,12 @@ contract TokenOperations {
     bool private factorySet = false; // 确保 factory 只能设置一次
 
     // 定义 PancakeSwap 地址
-    address public pancakeAddress = 0x9Ac64Cc6e4415144c455Bd8E483E3Bb5CE9E4F84;
+    address public pancakeAddress;
 
     // 代币地址，默认初始化为测试网地址
-    address public WBNB_ADDRESS = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;
+    address public WBNB_ADDRESS;
 
-    mapping(address => CurveInfo) public curves; // 将 curves 迁移到 TokenOperations
-
-    // event Debug(string message, address addr);
-    // event DebugValue(string message, uint256 value);
-    // event PermitEvent(address indexed creator, address indexed baseToken, address indexed quoteToken, bool isLaunchPermitted, bool isOnPancake);
-    // event DepositEvent(address indexed user, address indexed mint, uint256 cost, string orderId, string command, string extraInfo, uint8 maxIndex, uint8 index, uint256 timestamp);
-    // event WithdrawEvent(address indexed quoteToken, address indexed baseToken, uint256 quoteAmount, uint256 baseAmount, uint256 timestamp, address receiver);
-    // event TokenPurchased(address indexed buyer, address baseToken, uint256 quoteAmount, uint256 baseAmount, uint256 currentQuoteReserves, uint256 currentBaseReserves, uint256 timestamp);
-    // event TokenSold(address indexed seller, address baseToken, uint256 baseAmount, uint256 quoteAmount);
+    mapping(address => CurveInfo) public curves;
 
     // 自定义修饰符，确保只有 factory 地址能调用
     modifier onlyFactory() {
@@ -110,7 +102,6 @@ contract TokenOperations {
         if (curve.isLaunchPermitted && curve.currentQuoteReserves >= curve.target) {
             curve.isOnPancake = true;
         }
-
     }
 
     function buyToken(
@@ -121,33 +112,84 @@ contract TokenOperations {
     ) external payable onlyFactory {
         CurveInfo storage curve = curves[baseToken];
         require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
+        require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
 
         // 获取 quoteToken 和 baseToken 的精度
         uint8 quoteTokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
         uint8 baseTokenDecimals = CustomToken(baseToken).decimals();
 
-        // 处理 WBNB 或其他 quoteToken 的转移
+        uint256 adjustedQuoteAmount = quoteAmount;
+        uint256 adjustedFeeAmount = 0;
+        uint256 refundAmount = 0;
+        uint256 newQuoteAmount = 0;
+
         if (curve.quoteToken == WBNB_ADDRESS) {
             require(msg.value == quoteAmount, "Incorrect BNB amount sent");
-            (bool success, ) = WBNB_ADDRESS.call{value: quoteAmount}(abi.encodeWithSignature("deposit()"));
-            require(success, "WBNB deposit failed");
+            // 暂时不转换为 WBNB，先处理调整和退款
         } else {
             uint256 allowance = IERC20(curve.quoteToken).allowance(userAddress, address(this));
             require(allowance >= quoteAmount, "Insufficient allowance");
             require(IERC20(curve.quoteToken).transferFrom(userAddress, address(this), quoteAmount), "Transfer failed");
         }
 
-        // 计算手续费并更新 quoteAmount
+        // 计算手续费和扣除手续费后的金额
         uint256 feeAmount = (quoteAmount * curve.feeBps) / 10000;
-        uint256 newQuoteAmount = quoteAmount - feeAmount;
-
-        // 将手续费转移到指定的 feeRecipientAccount
-        require(IERC20(curve.quoteToken).transfer(initializeConfig.feeRecipientAccount(), feeAmount), "Fee transfer failed");
+        newQuoteAmount = quoteAmount - feeAmount;
 
         // 检查是否已达到发射目标，如果接近目标，调整购买量
-        if (curve.isLaunchPermitted && curve.currentQuoteReserves + newQuoteAmount >= curve.target) {
-            // 调整购买量，使得 quoteReserves 恰好等于 target
-            newQuoteAmount = curve.target - curve.currentQuoteReserves;
+        if (curve.isLaunchPermitted && curve.currentQuoteReserves + newQuoteAmount > curve.target) {
+            // 计算剩余的可购买额度
+            uint256 remainingAmount = curve.target - curve.currentQuoteReserves;
+
+            // 计算调整后的 quoteAmount，使得扣除手续费后的金额等于 remainingAmount
+            uint256 feeRate = curve.feeBps;
+            adjustedQuoteAmount = (remainingAmount * 10000) / (10000 - feeRate);
+
+            // 计算调整后的手续费
+            adjustedFeeAmount = adjustedQuoteAmount - remainingAmount;
+
+            // 确保调整后的购买金额不超过用户最初想支付的金额
+            require(adjustedQuoteAmount <= quoteAmount, "Adjusted quote amount exceeds initial quote amount");
+
+            // 计算需要退款的金额
+            refundAmount = quoteAmount - adjustedQuoteAmount;
+
+            // 更新变量
+            feeAmount = adjustedFeeAmount;
+            newQuoteAmount = remainingAmount;
+            quoteAmount = adjustedQuoteAmount; // 更新 quoteAmount 为调整后的金额
+
+            curve.isOnPancake = true;  // 达到目标后上线 PancakeSwap
+        } else {
+            // 如果没有调整，使用原始的 feeAmount 和 newQuoteAmount
+            adjustedFeeAmount = feeAmount;
+            newQuoteAmount = quoteAmount - feeAmount;
+        }
+
+        // 退款多余的部分给用户
+        if (refundAmount > 0) {
+            if (curve.quoteToken == WBNB_ADDRESS) {
+                // 退款 BNB 给用户
+                (bool refundSuccess, ) = userAddress.call{value: refundAmount}("");
+                require(refundSuccess, "Refund failed");
+            } else {
+                // 退款代币给用户
+                require(IERC20(curve.quoteToken).transfer(userAddress, refundAmount), "Refund failed");
+            }
+        }
+
+        // **现在** 处理手续费和转换 WBNB
+        if (curve.quoteToken == WBNB_ADDRESS) {
+            // 将手续费部分的 BNB 转给 feeRecipientAccount
+            (bool feeTransferSuccess, ) = initializeConfig.feeRecipientAccount().call{value: feeAmount}("");
+            require(feeTransferSuccess, "Fee transfer failed");
+
+            // 将剩余的 newQuoteAmount 转换为 WBNB
+            (bool success, ) = WBNB_ADDRESS.call{value: newQuoteAmount}(abi.encodeWithSignature("deposit()"));
+            require(success, "WBNB deposit failed");
+        } else {
+            // 非 WBNB 的情况下，转移手续费
+            require(IERC20(curve.quoteToken).transfer(initializeConfig.feeRecipientAccount(), feeAmount), "Fee transfer failed");
         }
 
         // 计算购买的 baseToken 数量，使用扣除手续费后的 newQuoteAmount 进行计算
@@ -169,9 +211,6 @@ contract TokenOperations {
         // 更新储备
         curve.currentQuoteReserves += newQuoteAmount;
         curve.currentBaseReserves += baseAmount;
-
-        // 触发事件
-        // emit TokenPurchased(userAddress, baseToken, newQuoteAmount, baseAmount, curve.currentQuoteReserves, curve.currentBaseReserves, block.timestamp);
     }
 
     // 新的 calculateTokensBought 函数逻辑
@@ -258,7 +297,7 @@ contract TokenOperations {
         address baseToken, 
         uint256 baseAmount, 
         address userAddress
-    ) external onlyFactory {
+    ) external onlyFactory payable {
         CurveInfo storage curve = curves[baseToken];
         require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
         require(curve.currentBaseReserves >= baseAmount, "Not enough base reserves");
@@ -267,7 +306,7 @@ contract TokenOperations {
         uint8 quoteTokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
         uint8 baseTokenDecimals = CustomToken(baseToken).decimals();
 
-        // 调用拆分后的计算函数来计算获得的 quoteAmount
+        // 调用计算函数来计算获得的 quoteAmount
         uint256 quoteAmount = calculateTokensSold(
             curve.initVirtualQuoteReserves,
             curve.initVirtualBaseReserves,
@@ -284,27 +323,31 @@ contract TokenOperations {
 
         require(newQuoteAmount > 0, "Invalid quote amount calculated");
 
-        // 将基础代币（baseToken）转回池子
+        // 用户将 baseToken 转回合约
         require(IERC20(baseToken).transferFrom(userAddress, address(this), baseAmount), "Base token transfer failed");
 
-        // 处理 WBNB 或其他 quoteToken 的转移逻辑
         if (curve.quoteToken == WBNB_ADDRESS) {
-            // 转移 netQuoteAmount 到用户账户
-            (bool success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", newQuoteAmount));
-            require(success, "WBNB withdraw failed");
-            (success, ) = payable(userAddress).call{value: newQuoteAmount}("");
-            require(success, "Transfer failed");
+            // 检查合约的 WBNB 余额是否足够
+            uint256 contractWbnbBalance = IERC20(WBNB_ADDRESS).balanceOf(address(this));
+            require(contractWbnbBalance >= quoteAmount, "Insufficient WBNB balance in contract");
 
-            // 转移手续费到 feeRecipientAccount
-            (success, ) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", feeAmount));
-            require(success, "WBNB withdraw failed");
-            (success, ) = payable(initializeConfig.feeRecipientAccount()).call{value: feeAmount}("");
-            require(success, "Fee transfer failed");
+            // 调用 withdraw，将 WBNB 转换为 BNB
+            (bool successWithdraw, bytes memory returnData) = WBNB_ADDRESS.call(abi.encodeWithSignature("withdraw(uint256)", quoteAmount));
+            require(successWithdraw, string(abi.encodePacked("WBNB withdraw failed: ", returnData)));
 
+            // 确保合约能够接收 BNB，需要实现 receive() 函数
+            // 将 BNB 分别转给用户和手续费接收者
+            // 由于 withdraw 后，合约收到 quoteAmount 的 BNB
+            // 将扣除手续费后的 BNB 转给用户
+            (bool successUser, ) = userAddress.call{value: newQuoteAmount}("");
+            require(successUser, "Transfer to user failed");
+
+            // 将手续费部分的 BNB 转给 feeRecipientAccount
+            (bool successFee, ) = initializeConfig.feeRecipientAccount().call{value: feeAmount}("");
+            require(successFee, "Fee transfer failed");
         } else {
             // 非 WBNB 的 quoteToken 转移
-            require(IERC20(curve.quoteToken).transfer(userAddress, newQuoteAmount), "Transfer failed");
-            // 将手续费转移到 feeRecipientAccount
+            require(IERC20(curve.quoteToken).transfer(userAddress, newQuoteAmount), "Transfer to user failed");
             require(IERC20(curve.quoteToken).transfer(initializeConfig.feeRecipientAccount(), feeAmount), "Fee transfer failed");
         }
 
@@ -312,6 +355,9 @@ contract TokenOperations {
         curve.currentQuoteReserves -= quoteAmount;
         curve.currentBaseReserves -= baseAmount;
     }
+
+    // 需要在合约中添加 receive() 函数，以便接收 BNB
+    receive() external payable {}
 
     function calculateTokensSold(
         uint256 initVirtualQuoteReserves,
@@ -378,70 +424,67 @@ contract TokenOperations {
     }
 
     // Deposit 功能
-    function deposit(
-        uint256 cost,
-        address token,
-        address userAddress
-    ) external payable onlyFactory { 
-        require(cost > 0, "Invalid parameters");
+    // function deposit(
+    //     uint256 cost,
+    //     address token,
+    //     address userAddress
+    // ) external payable onlyFactory { 
+    //     require(cost > 0, "Invalid parameters");
 
-        // 判断是否是原生 BNB 还是 ERC20 代币
-        if (msg.value > 0) {
-            // 用户存的是原生 BNB
-            require(token == address(0), "Token address must be zero for BNB");
-            require(msg.value == cost, "Incorrect BNB amount sent");
+    //     // 判断是否是原生 BNB 还是 ERC20 代币
+    //     if (msg.value > 0) {
+    //         // 用户存的是原生 BNB
+    //         require(token == address(0), "Token address must be zero for BNB");
+    //         require(msg.value == cost, "Incorrect BNB amount sent");
 
-            // 直接将 BNB 转移到存款账户
-            (bool success, ) = payable(getDepositAccount()).call{value: cost}("");
-            require(success, "BNB transfer failed");
+    //         // 直接将 BNB 转移到存款账户
+    //         (bool success, ) = payable(getDepositAccount()).call{value: cost}("");
+    //         require(success, "BNB transfer failed");
 
-            // emit DepositEvent(userAddress, address(0), cost, "OrderID", "Deposit", "ExtraInfo", 1, 1, block.timestamp);
+    //         // emit DepositEvent(userAddress, address(0), cost, "OrderID", "Deposit", "ExtraInfo", 1, 1, block.timestamp);
 
-        } else {
-            // 用户存的是 ERC20 代币，确保 token 地址有效
-            require(token != address(0), "Invalid token address");
+    //     } else {
+    //         // 用户存的是 ERC20 代币，确保 token 地址有效
+    //         require(token != address(0), "Invalid token address");
 
-            // 执行 ERC20 代币的 transferFrom 操作，将资金从用户转移到存款账户
-            require(IERC20(token).transferFrom(userAddress, getDepositAccount(), cost), "ERC20 transfer failed");
+    //         // 执行 ERC20 代币的 transferFrom 操作，将资金从用户转移到存款账户
+    //         require(IERC20(token).transferFrom(userAddress, getDepositAccount(), cost), "ERC20 transfer failed");
 
-            // emit DepositEvent(userAddress, token, cost, "OrderID", "Deposit", "ExtraInfo", 1, 1, block.timestamp);
-        }
-    }
+    //     }
+    // }
 
-    // Deposit 功能
-    function deposit2(
-        uint256 cost1,        // 第一个代币的存款金额
-        uint256 cost2,        // 第二个代币的存款金额
-        address mint1,        // 第一个代币的地址
-        address mint2,        // 第二个代币的地址
-        address userAddress   // 用户的地址
-    ) external payable onlyFactory { 
-        require(cost1 > 0 && cost2 > 0, "Invalid parameters");
-        require(mint1 != address(0) && mint2 != address(0), "Invalid mint addresses");
+    // // Deposit 功能
+    // function deposit2(
+    //     uint256 cost1,        // 第一个代币的存款金额
+    //     uint256 cost2,        // 第二个代币的存款金额
+    //     address mint1,        // 第一个代币的地址
+    //     address mint2,        // 第二个代币的地址
+    //     address userAddress   // 用户的地址
+    // ) external payable onlyFactory { 
+    //     require(cost1 > 0 && cost2 > 0, "Invalid parameters");
+    //     require(mint1 != address(0) && mint2 != address(0), "Invalid mint addresses");
 
-        // 处理第一个代币的存款
-        if (mint1 == WBNB_ADDRESS) {
-            require(msg.value == cost1, "Incorrect BNB amount sent");
-            (bool success, ) = payable(getDepositAccount()).call{value: cost1}("");
-            require(success, "Transfer failed");
-        } else {
-            // 执行 ERC20 代币的 transferFrom 操作
-            require(IERC20(mint1).transferFrom(userAddress, getDepositAccount(), cost1), "Transfer failed");
-        }
+    //     // 处理第一个代币的存款
+    //     if (mint1 == WBNB_ADDRESS) {
+    //         require(msg.value == cost1, "Incorrect BNB amount sent");
+    //         (bool success, ) = payable(getDepositAccount()).call{value: cost1}("");
+    //         require(success, "Transfer failed");
+    //     } else {
+    //         // 执行 ERC20 代币的 transferFrom 操作
+    //         require(IERC20(mint1).transferFrom(userAddress, getDepositAccount(), cost1), "Transfer failed");
+    //     }
 
-        // 处理第二个代币的存款
-        if (mint2 == WBNB_ADDRESS) {
-            require(msg.value == cost2, "Incorrect BNB amount sent");
-            (bool success, ) = payable(getDepositAccount()).call{value: cost2}("");
-            require(success, "Transfer failed");
-        } else {
-            // 执行 ERC20 代币的 transferFrom 操作
-            require(IERC20(mint2).transferFrom(userAddress, getDepositAccount(), cost2), "Transfer failed");
-        }
+    //     // 处理第二个代币的存款
+    //     if (mint2 == WBNB_ADDRESS) {
+    //         require(msg.value == cost2, "Incorrect BNB amount sent");
+    //         (bool success, ) = payable(getDepositAccount()).call{value: cost2}("");
+    //         require(success, "Transfer failed");
+    //     } else {
+    //         // 执行 ERC20 代币的 transferFrom 操作
+    //         require(IERC20(mint2).transferFrom(userAddress, getDepositAccount(), cost2), "Transfer failed");
+    //     }
 
-        // 事件触发，记录存款事件
-        // emit DepositEvent2(userAddress, mint1, cost1, mint2, cost2, block.timestamp);
-    }
+    // }
 
     // Withdraw 功能
     function withdraw(
@@ -482,7 +525,6 @@ contract TokenOperations {
         curve.baseToken = address(0);
         curve.quoteToken = address(0);
 
-        // emit WithdrawEvent(curve.quoteToken, baseToken, quoteBalance, baseBalance, block.timestamp, receiver);
     }
 
     function withdraw2(
@@ -503,9 +545,5 @@ contract TokenOperations {
             // 如果是 ERC20 代币，则直接转账
             require(IERC20(token).transfer(receiver, cost), "Transfer failed");
         }
-
-        // 记录转账事件
-        // emit Withdraw2Event(msg.sender, receiver, token, cost, block.timestamp);
     }
-
 }
