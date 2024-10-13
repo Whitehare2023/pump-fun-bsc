@@ -68,26 +68,4 @@ contract InitializeConfig {
     function updateCreateFee(uint256 newCreateFee) external onlyFactory {
         createFee = newCreateFee;
     }
-
-    // 通过 keccak256 简单生成 bonding_curve_base 地址
-    function generateBondingCurveBase(
-        address _tokenFactory,
-        string memory tokenName,
-        bytes memory bytecode,    // 传入部署合约的字节码
-        bytes32 salt              // 使用 salt 保证地址的唯一性
-    ) public returns (address) {
-        // 通过 `_tokenFactory` 和 `tokenName` 生成独特的 `salt`
-        bytes32 derivedSalt = keccak256(abi.encodePacked(_tokenFactory, tokenName, salt));
-        address addr;
-
-        // 通过 CREATE2 部署合约
-        assembly {
-            addr := create2(0, add(bytecode, 0x20), mload(bytecode), derivedSalt)
-            if iszero(extcodesize(addr)) {
-                revert(0, 0)
-            }
-        }
-
-        return addr;
-    }
 }

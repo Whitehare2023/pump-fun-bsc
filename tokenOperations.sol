@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import "./openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import "./openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./customToken.sol"; // 引入 CustomToken 合约
 import "./add_quote_token.sol"; // 引入 QuoteTokenManager 合约
 import "./state.sol";
 import "./initialize_config.sol";
 import { UD60x18, ud } from "@prb/math/src/UD60x18.sol";  // 引入 PRBMathUD60x18 库
+import "./Calculations.sol";
 
-contract TokenOperations {
+contract TokenOperations is ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
+    Calculations public calculations;  // 引入 Calculations 合约实例
     QuoteTokenManager public quoteTokenManager; // 引入 QuoteTokenManager 实例
     InitializeConfig public initializeConfig;  // 添加 initializeConfig 实例
 
@@ -58,12 +63,14 @@ contract TokenOperations {
         address _quoteTokenManager,        // 传入 quoteTokenManager 的地址
         address _initializeConfig,         // 传入 initializeConfig 的地址
         address _pancakeAddress,           // pancakeAddress
-        address _WBNB_ADDRESS              // WBNB_ADDRESS
+        address _WBNB_ADDRESS,              // WBNB_ADDRESS
+        address _calculations
     ) external onlyFactory {
         quoteTokenManager = QuoteTokenManager(_quoteTokenManager);
         initializeConfig = InitializeConfig(_initializeConfig);
         pancakeAddress = _pancakeAddress;
         WBNB_ADDRESS = _WBNB_ADDRESS;
+        calculations = Calculations(_calculations);
     }
 
     function initializeCurve(
@@ -109,7 +116,7 @@ contract TokenOperations {
         uint256 quoteAmount, 
         uint256 minBaseAmount, 
         address userAddress
-    ) external payable onlyFactory {
+    ) external payable onlyFactory nonReentrant {
         CurveInfo storage curve = curves[baseToken];
         require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
         require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
@@ -193,7 +200,7 @@ contract TokenOperations {
         }
 
         // 计算购买的 baseToken 数量，使用扣除手续费后的 newQuoteAmount 进行计算
-        uint256 baseAmount = calculateTokensBought(
+        uint256 baseAmount = calculations.calculateTokensBought(
             curve.initVirtualQuoteReserves,
             curve.initVirtualBaseReserves,
             curve.currentBaseReserves,
@@ -213,91 +220,11 @@ contract TokenOperations {
         curve.currentBaseReserves += baseAmount;
     }
 
-    // 新的 calculateTokensBought 函数逻辑
-    function calculateTokensBought(
-        uint256 initVirtualQuoteReserves,
-        uint256 initVirtualBaseReserves,
-        uint256 currentBaseSupply,
-        uint256 currentQuoteBalance,
-        uint256 buyQuoteAmount,
-        uint8 quoteTokenDecimals,
-        uint8 baseTokenDecimals
-    ) internal pure returns (uint256) {
-        // 动态调整精度因子，确保所有数值统一到 18 位小数精度
-        uint256 scalingFactorQuote = 10**(18 - quoteTokenDecimals);  // 调整为 18 位精度
-        uint256 scalingFactorBase = 10**(18 - baseTokenDecimals);    // 调整为 18 位精度
-
-        // 计算 np 和 mPlusP
-        uint256 npResult = calculateNp(
-            initVirtualBaseReserves,
-            currentQuoteBalance,
-            buyQuoteAmount,
-            scalingFactorQuote,
-            scalingFactorBase
-        );
-
-        uint256 mPlusPResult = calculateMPlusP(
-            initVirtualQuoteReserves,
-            currentQuoteBalance,
-            buyQuoteAmount,
-            scalingFactorQuote
-        );
-
-        return calculateFinalTokensBought(
-            npResult,
-            mPlusPResult,
-            currentBaseSupply,
-            scalingFactorBase,
-            baseTokenDecimals
-        );
-    }
-
-    // 分开的第一步：计算 np (n * p)
-    function calculateNp(
-        uint256 initVirtualBaseReserves,
-        uint256 currentQuoteBalance,
-        uint256 buyQuoteAmount,
-        uint256 scalingFactorQuote,
-        uint256 scalingFactorBase
-    ) internal pure returns (uint256) {
-        UD60x18 p = ud((currentQuoteBalance + buyQuoteAmount) * scalingFactorQuote);  // p
-        UD60x18 n = ud(initVirtualBaseReserves * scalingFactorBase);  // n
-        UD60x18 np = n.mul(p);  // n * p
-        return np.unwrap();
-    }
-
-    // 分开的第二步：计算 mPlusP (m + p)
-    function calculateMPlusP(
-        uint256 initVirtualQuoteReserves,
-        uint256 currentQuoteBalance,
-        uint256 buyQuoteAmount,
-        uint256 scalingFactorQuote
-    ) internal pure returns (uint256) {
-        UD60x18 m = ud(initVirtualQuoteReserves * scalingFactorQuote);  // m
-        UD60x18 p = ud((currentQuoteBalance + buyQuoteAmount) * scalingFactorQuote);  // p
-        UD60x18 mPlusP = m.add(p);  // m + p
-        return mPlusP.unwrap();
-    }
-
-    // 分开的第三步：计算最终的 tokensBought
-    function calculateFinalTokensBought(
-        uint256 npResult,
-        uint256 mPlusPResult,
-        uint256 currentBaseSupply,
-        uint256 scalingFactorBase,
-        uint8 baseTokenDecimals
-    ) internal pure returns (uint256) {
-        UD60x18 np = ud(npResult);
-        UD60x18 mPlusP = ud(mPlusPResult);
-        UD60x18 tokensBought = np.div(mPlusP).sub(ud(currentBaseSupply * scalingFactorBase));
-        return tokensBought.unwrap() / (10**(18 - baseTokenDecimals));  // 还原精度
-    }
-
     function sellToken(
         address baseToken, 
         uint256 baseAmount, 
         address userAddress
-    ) external onlyFactory payable {
+    ) external onlyFactory nonReentrant payable {
         CurveInfo storage curve = curves[baseToken];
         require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
         require(curve.currentBaseReserves >= baseAmount, "Not enough base reserves");
@@ -307,7 +234,7 @@ contract TokenOperations {
         uint8 baseTokenDecimals = CustomToken(baseToken).decimals();
 
         // 调用计算函数来计算获得的 quoteAmount
-        uint256 quoteAmount = calculateTokensSold(
+        uint256 quoteAmount = calculations.calculateTokensSold(
             curve.initVirtualQuoteReserves,
             curve.initVirtualBaseReserves,
             curve.currentBaseReserves,
@@ -359,138 +286,71 @@ contract TokenOperations {
     // 需要在合约中添加 receive() 函数，以便接收 BNB
     receive() external payable {}
 
-    function calculateTokensSold(
-        uint256 initVirtualQuoteReserves,
-        uint256 initVirtualBaseReserves,
-        uint256 currentBaseSupply,
-        uint256 currentQuoteBalance,
-        uint256 sellBaseAmount,
-        uint8 quoteTokenDecimals,
-        uint8 baseTokenDecimals
-    ) internal pure returns (uint256) {
-        // 动态调整精度因子，确保所有数值统一到 18 位小数精度
-        uint256 scalingFactorQuote = 10 ** (18 - quoteTokenDecimals);  // 调整为 18 位精度
-        uint256 scalingFactorBase = 10 ** (18 - baseTokenDecimals);    // 调整为 18 位精度
+    // Deposit 功能
+    function deposit(
+        uint256 cost,
+        address token,
+        address userAddress
+    ) external payable onlyFactory nonReentrant { 
+        require(cost > 0, "Invalid parameters");
 
-        // 计算 k、m、n 以及最终的 quoteAmount
-        UD60x18 k = calculateK(currentBaseSupply, sellBaseAmount, scalingFactorBase);
-        UD60x18 m = calculateM(initVirtualQuoteReserves, scalingFactorQuote);
-        UD60x18 n = calculateN(initVirtualBaseReserves, scalingFactorBase);
-        UD60x18 km = calculateKM(k, m);
-        UD60x18 nMinusK = n.sub(k);
+        // 判断是否是原生 BNB 还是 ERC20 代币
+        if (msg.value > 0) {
+            // 用户存的是原生 BNB
+            require(token == address(0), "Token address must be zero for BNB");
+            require(msg.value == cost, "Incorrect BNB amount sent");
 
-        require(nMinusK.unwrap() > 0, "nMinusK is zero, cannot divide by zero");
+            // 直接将 BNB 转移到存款账户
+            (bool success, ) = payable(getDepositAccount()).call{value: cost}("");
+            require(success, "BNB transfer failed");
 
-        return calculateFinalQuoteAmount(currentQuoteBalance, km, nMinusK, scalingFactorQuote);
-    }
+        } else {
+            // 用户存的是 ERC20 代币，确保 token 地址有效
+            require(token != address(0), "Invalid token address");
 
-    function calculateK(
-        uint256 currentBaseSupply,
-        uint256 sellBaseAmount,
-        uint256 scalingFactorBase
-    ) internal pure returns (UD60x18) {
-        return ud(currentBaseSupply * scalingFactorBase).sub(ud(sellBaseAmount * scalingFactorBase));
-    }
-
-    function calculateM(
-        uint256 initVirtualQuoteReserves,
-        uint256 scalingFactorQuote
-    ) internal pure returns (UD60x18) {
-        return ud(initVirtualQuoteReserves * scalingFactorQuote);
-    }
-
-    function calculateN(
-        uint256 initVirtualBaseReserves,
-        uint256 scalingFactorBase
-    ) internal pure returns (UD60x18) {
-        return ud(initVirtualBaseReserves * scalingFactorBase);
-    }
-
-    function calculateKM(
-        UD60x18 k,
-        UD60x18 m
-    ) internal pure returns (UD60x18) {
-        return k.mul(m);
-    }
-
-    function calculateFinalQuoteAmount(
-        uint256 currentQuoteBalance,
-        UD60x18 km,
-        UD60x18 nMinusK,
-        uint256 scalingFactorQuote
-    ) internal pure returns (uint256) {
-        UD60x18 quoteAmount = ud(currentQuoteBalance * scalingFactorQuote).sub(km.div(nMinusK));
-        return quoteAmount.unwrap() / scalingFactorQuote;
+            // 执行 ERC20 代币的 transferFrom 操作，将资金从用户转移到存款账户
+            require(IERC20(token).transferFrom(userAddress, getDepositAccount(), cost), "ERC20 transfer failed");
+        }
     }
 
     // Deposit 功能
-    // function deposit(
-    //     uint256 cost,
-    //     address token,
-    //     address userAddress
-    // ) external payable onlyFactory { 
-    //     require(cost > 0, "Invalid parameters");
+    function deposit2(
+        uint256 cost1,        // 第一个代币的存款金额
+        uint256 cost2,        // 第二个代币的存款金额
+        address mint1,        // 第一个代币的地址
+        address mint2,        // 第二个代币的地址
+        address userAddress   // 用户的地址
+    ) external payable onlyFactory nonReentrant { 
+        require(cost1 > 0 && cost2 > 0, "Invalid parameters");
+        require(mint1 != address(0) && mint2 != address(0), "Invalid mint addresses");
 
-    //     // 判断是否是原生 BNB 还是 ERC20 代币
-    //     if (msg.value > 0) {
-    //         // 用户存的是原生 BNB
-    //         require(token == address(0), "Token address must be zero for BNB");
-    //         require(msg.value == cost, "Incorrect BNB amount sent");
+        // 处理第一个代币的存款
+        if (mint1 == WBNB_ADDRESS) {
+            require(msg.value == cost1, "Incorrect BNB amount sent");
+            (bool success, ) = payable(getDepositAccount()).call{value: cost1}("");
+            require(success, "Transfer failed");
+        } else {
+            // 执行 ERC20 代币的 transferFrom 操作
+            require(IERC20(mint1).transferFrom(userAddress, getDepositAccount(), cost1), "Transfer failed");
+        }
 
-    //         // 直接将 BNB 转移到存款账户
-    //         (bool success, ) = payable(getDepositAccount()).call{value: cost}("");
-    //         require(success, "BNB transfer failed");
+        // 处理第二个代币的存款
+        if (mint2 == WBNB_ADDRESS) {
+            require(msg.value == cost2, "Incorrect BNB amount sent");
+            (bool success, ) = payable(getDepositAccount()).call{value: cost2}("");
+            require(success, "Transfer failed");
+        } else {
+            // 执行 ERC20 代币的 transferFrom 操作
+            require(IERC20(mint2).transferFrom(userAddress, getDepositAccount(), cost2), "Transfer failed");
+        }
 
-    //         // emit DepositEvent(userAddress, address(0), cost, "OrderID", "Deposit", "ExtraInfo", 1, 1, block.timestamp);
-
-    //     } else {
-    //         // 用户存的是 ERC20 代币，确保 token 地址有效
-    //         require(token != address(0), "Invalid token address");
-
-    //         // 执行 ERC20 代币的 transferFrom 操作，将资金从用户转移到存款账户
-    //         require(IERC20(token).transferFrom(userAddress, getDepositAccount(), cost), "ERC20 transfer failed");
-
-    //     }
-    // }
-
-    // // Deposit 功能
-    // function deposit2(
-    //     uint256 cost1,        // 第一个代币的存款金额
-    //     uint256 cost2,        // 第二个代币的存款金额
-    //     address mint1,        // 第一个代币的地址
-    //     address mint2,        // 第二个代币的地址
-    //     address userAddress   // 用户的地址
-    // ) external payable onlyFactory { 
-    //     require(cost1 > 0 && cost2 > 0, "Invalid parameters");
-    //     require(mint1 != address(0) && mint2 != address(0), "Invalid mint addresses");
-
-    //     // 处理第一个代币的存款
-    //     if (mint1 == WBNB_ADDRESS) {
-    //         require(msg.value == cost1, "Incorrect BNB amount sent");
-    //         (bool success, ) = payable(getDepositAccount()).call{value: cost1}("");
-    //         require(success, "Transfer failed");
-    //     } else {
-    //         // 执行 ERC20 代币的 transferFrom 操作
-    //         require(IERC20(mint1).transferFrom(userAddress, getDepositAccount(), cost1), "Transfer failed");
-    //     }
-
-    //     // 处理第二个代币的存款
-    //     if (mint2 == WBNB_ADDRESS) {
-    //         require(msg.value == cost2, "Incorrect BNB amount sent");
-    //         (bool success, ) = payable(getDepositAccount()).call{value: cost2}("");
-    //         require(success, "Transfer failed");
-    //     } else {
-    //         // 执行 ERC20 代币的 transferFrom 操作
-    //         require(IERC20(mint2).transferFrom(userAddress, getDepositAccount(), cost2), "Transfer failed");
-    //     }
-
-    // }
+    }
 
     // Withdraw 功能
     function withdraw(
         address baseToken,
         address payable receiver
-    ) external onlyFactory {
+    ) external onlyFactory nonReentrant {
         require(baseToken != address(0), "Invalid base token address");
         require(receiver != address(0), "Invalid receiver address");
 
@@ -531,7 +391,7 @@ contract TokenOperations {
         uint256 cost,
         address token,  
         address payable receiver
-    ) external onlyFactory { 
+    ) external onlyFactory nonReentrant { 
         require(token != address(0), "Invalid token address");
         require(receiver != address(0), "Invalid receiver address");
 

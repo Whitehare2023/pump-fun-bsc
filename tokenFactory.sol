@@ -16,6 +16,7 @@ contract TokenFactory is Ownable {
     address public initialOwner;
     address WBNB;
     address pancake;
+    address calculations;
     InitializeConfig public initializeConfig;
     QuoteTokenManager public quoteTokenManager;
     TokenOperations public tokenOperations;
@@ -68,10 +69,12 @@ contract TokenFactory is Ownable {
             // 测试网地址
             WBNB = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;  // WBNB 测试网地址
             pancake = 0x9Ac64Cc6e4415144c455Bd8E483E3Bb5CE9E4F84;  // PancakeSwap 测试网地址
+            calculations = 0x95132af3E176E78ae19057Ac9Ae670c107588905;
         } else {
             // 主网地址
             WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;  // WBNB 主网地址
             pancake = 0x10ED43C718714eb63d5aA57B78B54704E256024E;  // PancakeSwap 主网地址
+            calculations = 0x10ED43C718714eb63d5aA57B78B54704E256024E;
         }
     }
 
@@ -107,13 +110,15 @@ contract TokenFactory is Ownable {
         CustomToken(cloneTokenInstance).setOperations(cloneOperationsInstance);
         // 设置 tokenFactory 地址
         TokenOperations(payable(cloneOperationsInstance)).setFactory(address(this));
+        CustomToken(cloneTokenInstance).setFactory(address(this));
 
         // 调用初始化方法传递所需的地址
         TokenOperations(payable(cloneOperationsInstance)).initialize(
             address(quoteTokenManager),        // 传入 quoteTokenManager 的地址
             address(initializeConfig),         // 传入 initializeConfig 的地址
             pancake,                           // pancakeAddress
-            WBNB                               // WBNB_ADDRESS
+            WBNB,                               // WBNB_ADDRESS
+            calculations
         );
 
         // 确保 quoteToken 已注册
@@ -211,7 +216,7 @@ contract TokenFactory is Ownable {
             msg.sender,                           // 用户地址
             block.timestamp,                      // 时间戳
             curve.initVirtualQuoteReserves + curve.currentQuoteReserves,   // 虚拟报价代币储备量
-            curve.initVirtualBaseReserves - curve.currentBaseReserves      // 虚拟基础代币储备量
+            curve.initVirtualBaseReserves + curve.currentBaseReserves      // 虚拟基础代币储备量
         );
 
         // 触发 BuyEvent2
@@ -247,7 +252,7 @@ contract TokenFactory is Ownable {
             curve.feeBps,                            // 手续费
             msg.sender,                             // 用户地址
             block.timestamp,                         // 时间戳
-            curve.initVirtualQuoteReserves + curve.currentQuoteReserves,  // 虚拟报价代币储备量
+            curve.initVirtualQuoteReserves - curve.currentQuoteReserves,  // 虚拟报价代币储备量
             curve.initVirtualBaseReserves - curve.currentBaseReserves     // 虚拟基础代币储备量
         );
 
@@ -284,41 +289,41 @@ contract TokenFactory is Ownable {
     }
 
     // Deposit 功能
-    // function deposit(
-    //     uint256 cost,
-    //     address mint,
-    //     address baseToken
-    // ) external payable  {
-    //     TokenOperations(payable(baseTokenToOperations[baseToken])).deposit{value: msg.value}(cost, mint, msg.sender);
+    function deposit(
+        uint256 cost,
+        address mint,
+        address baseToken
+    ) external payable  {
+        TokenOperations(payable(baseTokenToOperations[baseToken])).deposit{value: msg.value}(cost, mint, msg.sender);
 
-    //     // 触发 DepositEvent
-    //     emit DepositEvent(
-    //         msg.sender,   // 存款操作的用户地址
-    //         mint,         // 存款代币的合约地址
-    //         cost,         // 存款的代币数量
-    //         block.timestamp // 事件发生的时间戳
-    //     );
-    // }
+        // 触发 DepositEvent
+        emit DepositEvent(
+            msg.sender,   // 存款操作的用户地址
+            mint,         // 存款代币的合约地址
+            cost,         // 存款的代币数量
+            block.timestamp // 事件发生的时间戳
+        );
+    }
 
-    // function deposit2(
-    //     uint256 cost1,        // 第一个代币的存款金额
-    //     uint256 cost2,        // 第二个代币的存款金额
-    //     address mint1,        // 第一个代币的地址
-    //     address mint2,        // 第二个代币的地址
-    //     address baseToken     // TokenOperations 实例
-    // ) external payable  {
-    //     TokenOperations(payable(baseTokenToOperations[baseToken])).deposit2{value: msg.value}(cost1, cost2, mint1, mint2, msg.sender);
+    function deposit2(
+        uint256 cost1,        // 第一个代币的存款金额
+        uint256 cost2,        // 第二个代币的存款金额
+        address mint1,        // 第一个代币的地址
+        address mint2,        // 第二个代币的地址
+        address baseToken     // TokenOperations 实例
+    ) external payable  {
+        TokenOperations(payable(baseTokenToOperations[baseToken])).deposit2{value: msg.value}(cost1, cost2, mint1, mint2, msg.sender);
 
-    //     // 触发 Deposit2Event 事件
-    //     emit Deposit2Event(
-    //         msg.sender,    // 用户地址
-    //         mint1,         // 第一个代币地址
-    //         cost1,         // 第一个代币的存款金额
-    //         mint2,         // 第二个代币地址
-    //         cost2,         // 第二个代币的存款金额
-    //         block.timestamp  // 事件发生的时间戳
-    //     );
-    // }
+        // 触发 Deposit2Event 事件
+        emit Deposit2Event(
+            msg.sender,    // 用户地址
+            mint1,         // 第一个代币地址
+            cost1,         // 第一个代币的存款金额
+            mint2,         // 第二个代币地址
+            cost2,         // 第二个代币的存款金额
+            block.timestamp  // 事件发生的时间戳
+        );
+    }
 
     function withdraw(
         address baseToken
