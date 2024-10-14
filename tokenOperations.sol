@@ -118,7 +118,7 @@ contract TokenOperations is ReentrancyGuard {
         address userAddress
     ) external payable onlyFactory nonReentrant {
         CurveInfo storage curve = curves[baseToken];
-        require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
+        // require(userAddress == curve.creator, "Caller is not the creator of the bonding curve");
         require(!curve.isOnPancake, "Liquidity already on PancakeSwap");
 
         // 获取 quoteToken 和 baseToken 的精度
