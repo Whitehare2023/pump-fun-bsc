@@ -125,7 +125,6 @@ contract TokenOperations is ReentrancyGuard {
         uint8 quoteTokenDecimals = uint8(quoteTokenManager.getQuoteTokenDecimals(curve.quoteToken));
         uint8 baseTokenDecimals = CustomToken(baseToken).decimals();
 
-        uint256 adjustedQuoteAmount = quoteAmount;
         uint256 adjustedFeeAmount = 0;
         uint256 refundAmount = 0;
         uint256 newQuoteAmount = 0;
@@ -134,8 +133,8 @@ contract TokenOperations is ReentrancyGuard {
             require(msg.value == quoteAmount, "Incorrect BNB amount sent");
             // 暂时不转换为 WBNB，先处理调整和退款
         } else {
-            uint256 allowance = IERC20(curve.quoteToken).allowance(userAddress, address(this));
-            require(allowance >= quoteAmount, "Insufficient allowance");
+            // uint256 allowance = IERC20(curve.quoteToken).allowance(userAddress, address(this));
+            // require(allowance >= quoteAmount, "Insufficient allowance");
             require(IERC20(curve.quoteToken).transferFrom(userAddress, address(this), quoteAmount), "Transfer failed");
         }
 
@@ -148,29 +147,23 @@ contract TokenOperations is ReentrancyGuard {
             // 计算剩余的可购买额度
             uint256 remainingAmount = curve.target - curve.currentQuoteReserves;
 
-            // 计算调整后的 quoteAmount，使得扣除手续费后的金额等于 remainingAmount
-            uint256 feeRate = curve.feeBps;
-            adjustedQuoteAmount = (remainingAmount * 10000) / (10000 - feeRate);
-
             // 计算调整后的手续费
-            adjustedFeeAmount = adjustedQuoteAmount - remainingAmount;
+            adjustedFeeAmount = (remainingAmount * curve.feeBps) / 10000;
 
-            // 确保调整后的购买金额不超过用户最初想支付的金额
-            require(adjustedQuoteAmount <= quoteAmount, "Adjusted quote amount exceeds initial quote amount");
+            // 确保购买的 quoteAmount 满足扣除手续费后的目标
+            require(remainingAmount + adjustedFeeAmount <= quoteAmount, "Adjusted quote amount exceeds initial quote amount");
 
             // 计算需要退款的金额
-            refundAmount = quoteAmount - adjustedQuoteAmount;
+            refundAmount = quoteAmount - (remainingAmount + adjustedFeeAmount);
 
             // 更新变量
             feeAmount = adjustedFeeAmount;
             newQuoteAmount = remainingAmount;
-            quoteAmount = adjustedQuoteAmount; // 更新 quoteAmount 为调整后的金额
 
             curve.isOnPancake = true;  // 达到目标后上线 PancakeSwap
         } else {
             // 如果没有调整，使用原始的 feeAmount 和 newQuoteAmount
             adjustedFeeAmount = feeAmount;
-            newQuoteAmount = quoteAmount - feeAmount;
         }
 
         // 退款多余的部分给用户

@@ -61,7 +61,6 @@ contract TokenFactory is Ownable {
         decimals = 6; 
 
         setTokenAddresses(isTestnet);
-        initializeConfig.setFactory(address(this));
     }
 
     function setTokenAddresses(bool isTestnet) internal {
@@ -106,12 +105,9 @@ contract TokenFactory is Ownable {
         // 初始化代币
         initializeToken(cloneTokenInstance, cloneOperationsInstance, params);
 
-        // 设置 operations 地址
-        CustomToken(cloneTokenInstance).setOperations(cloneOperationsInstance);
         // 设置 tokenFactory 地址
         TokenOperations(payable(cloneOperationsInstance)).setFactory(address(this));
-        CustomToken(cloneTokenInstance).setFactory(address(this));
-
+        
         // 调用初始化方法传递所需的地址
         TokenOperations(payable(cloneOperationsInstance)).initialize(
             address(quoteTokenManager),        // 传入 quoteTokenManager 的地址
@@ -388,30 +384,5 @@ contract TokenFactory is Ownable {
             curve.isOnPancake,                   // 是否上线 PancakeSwap
             block.timestamp                      // 时间戳
         );
-    }
-
-    // 允许 TokenFactory 的拥有者通过这些接口修改 InitializeConfig 中的参数
-    function updatePlatformAddress(address newPlatform) external onlyOwner {
-        initializeConfig.updatePlatform(newPlatform);
-    }
-
-    function updateFeeRecipientAddress(address newFeeRecipient) external onlyOwner {
-        initializeConfig.updateFeeRecipient(newFeeRecipient);
-    }
-
-    function updateDepositAccountAddress(address newDepositAccount) external onlyOwner {
-        initializeConfig.updateDepositAccount(newDepositAccount);
-    }
-
-    function updateSupplyLimits(uint256 newBaseMinSupply, uint256 newBaseMaxSupply) external onlyOwner {
-        initializeConfig.updateSupplyLimits(newBaseMinSupply, newBaseMaxSupply);
-    }
-
-    function updateFeeRates(uint256 newBaseMinFeeRate, uint256 newBaseMaxFeeRate) external onlyOwner {
-        initializeConfig.updateFeeRates(newBaseMinFeeRate, newBaseMaxFeeRate);
-    }
-
-    function updateCreateFee(uint256 newCreateFee) external onlyOwner {
-        initializeConfig.updateCreateFee(newCreateFee);
     }
 }

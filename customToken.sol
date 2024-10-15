@@ -131,26 +131,6 @@ contract CustomToken is IERC20 {
         return true;
     }
 
-    // 设置 factory 地址
-    function setFactory(address _factory) external {
-        require(!factorySet, "Factory already set");
-        require(_factory != address(0), "Factory address is invalid");
-        factory = _factory;
-        factorySet = true;
-    }
-
-    // 设置 operations 地址
-    function setOperations(address _operations) external {
-        require(_operations != address(0), "Operations address is invalid");
-        operations = _operations;
-    }
-
-    // 自定义修饰符，确保只有 factory 或 operations 地址能调用
-    modifier onlyFactoryOrOperations() {
-        require(msg.sender == factory || msg.sender == operations, "Caller is not the factory or operations");
-        _;
-    }
-
     function mint(address to, uint256 amount) internal {
         require(to != address(0), "Mint to the zero address");
         require(amount > 0, "Mint amount must be greater than zero");
